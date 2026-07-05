@@ -1,9 +1,11 @@
 /**
  * NotesTN Editor — ProseMirror entry point.
  *
- * Runs inside WKWebView. Communicates with Swift via:
- *   JS → Swift:  window.webkit.messageHandlers.editorMessage.postMessage(msg)
- *   Swift → JS:  window.NativeEditor.setContent(html) / execCommand(cmd, value) etc.
+ * Shared by the Mac (WKWebView) and Android (WebView) apps. Communicates with
+ * native code via:
+ *   JS → Swift:   window.webkit.messageHandlers.editorMessage.postMessage(msg)
+ *   JS → Kotlin:  window.AndroidBridge.postMessage(JSON.stringify(msg))
+ *   Native → JS:  window.NativeEditor.setContent(html) / execCommand(cmd, value) etc.
  */
 
 import { EditorState, Plugin, Transaction } from 'prosemirror-state';
@@ -53,7 +55,14 @@ function postToNative(msg: NativeMessage) {
   try {
     window.webkit?.messageHandlers?.['editorMessage']?.postMessage(msg);
   } catch (_) {
-    // Not running in WKWebView (dev mode) — ignore
+    // Not running in WKWebView — ignore
+  }
+  try {
+    // Android's addJavascriptInterface only accepts primitive/String args, so
+    // the message is JSON-encoded here and decoded on the Kotlin side.
+    window.AndroidBridge?.postMessage(JSON.stringify(msg));
+  } catch (_) {
+    // Not running in Android WebView — ignore
   }
 }
 
@@ -487,6 +496,8 @@ declare global {
         [key: string]: { postMessage: (msg: any) => void };
       };
     };
+    // Injected by Android via WebView.addJavascriptInterface("AndroidBridge", ...)
+    AndroidBridge?: { postMessage: (json: string) => void };
   }
 }
 

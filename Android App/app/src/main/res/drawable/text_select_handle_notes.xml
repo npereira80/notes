@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Custom-colored (yellow) replacement for the system text-select handle drawable.
+     Used because tinting via android:colorAccent / colorControlActivated has no
+     effect on WebView's Chromium-drawn handles on current WebView versions — see
+     EditorWebView.kt comment and the linked Chromium/flutter_inappwebview issues.
+     Supplying our own pre-colored drawable sidesteps that tinting step entirely. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="30dp"
+    android:height="30dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:rotation="180">
+        <path
+            android:fillColor="#FFD60A"
+            android:pathData="M12,2 C7,2 4,6 4,11 C4,17 12,22 12,22 C12,22 20,17 20,11 C20,6 17,2 12,2 Z" />
+    </group>
+</vector>

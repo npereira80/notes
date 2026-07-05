@@ -1,15 +1,20 @@
 import * as esbuild from 'esbuild';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const isWatch = process.argv.includes('--watch');
 
-const outDir = resolve(__dirname, '../NotesTN/NotesTN/Editor');
-mkdirSync(outDir, { recursive: true });
+// Shared by both native clients: Mac (WKWebView) reads it from the app bundle,
+// Android (WebView) reads it from assets/ via WebViewAssetLoader.
+const outDirs = [
+  resolve(__dirname, '../NotesTN/NotesTN/Editor'),
+  resolve(__dirname, '../../Android App/app/src/main/assets'),
+];
+for (const dir of outDirs) mkdirSync(dir, { recursive: true });
 
-const bundlePath = resolve(outDir, 'editor.bundle.js');
+const bundlePath = resolve(outDirs[0], 'editor.bundle.js');
 
 const buildOptions = {
   entryPoints: [resolve(__dirname, 'src/index.ts')],
@@ -31,7 +36,12 @@ if (isWatch) {
   const result = await esbuild.build(buildOptions);
   if (result.errors.length === 0) {
     console.log(`Built editor.bundle.js → ${bundlePath}`);
-    writeEditorHtml(outDir);
+    writeEditorHtml(outDirs[0]);
+    for (const dir of outDirs.slice(1)) {
+      copyFileSync(bundlePath, resolve(dir, 'editor.bundle.js'));
+      writeEditorHtml(dir);
+      console.log(`Copied editor.bundle.js + editor.html → ${dir}`);
+    }
   }
 }
 
@@ -42,6 +52,16 @@ function writeEditorHtml(outDir) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob:;">
+<script>
+  // Runs synchronously during <head> parsing, before first paint, so there's
+  // no flash of the wrong theme. Android passes ?theme=dark|light on the
+  // loadUrl() call (see EditorWebView.kt); Mac never sets it and relies on
+  // the prefers-color-scheme media query instead.
+  (function () {
+    var m = /[?&]theme=(dark|light)/.exec(location.search);
+    if (m) document.documentElement.setAttribute('data-theme', m[1]);
+  })();
+</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -71,6 +91,34 @@ function writeEditorHtml(outDir) {
     }
   }
 
+  /* Explicit override, set imperatively by the Android host (see the bootstrap
+     script below + EditorWebView.kt). Android WebView's support for reporting
+     prefers-color-scheme to the page is unreliable across OEM/WebView versions,
+     so Android doesn't rely on the media query above — it sets this attribute
+     directly instead. Higher specificity than :root wins over the media query
+     regardless of what WebView reports. No-op on Mac (WKWebView never sets it,
+     and correctly honors prefers-color-scheme on its own). */
+  :root[data-theme="dark"] {
+    --color-text: #f0f0f0;
+    --color-bg: #1e1e1e;
+    --color-secondary: #aaa;
+    --color-selection: rgba(80, 160, 255, 0.3);
+    --color-code-bg: rgba(255, 255, 255, 0.08);
+    --color-blockquote: #777;
+    --color-highlight: #854d0e;
+    --color-link: #fbbf24;
+  }
+  :root[data-theme="light"] {
+    --color-text: #000;
+    --color-bg: #fff;
+    --color-secondary: #666;
+    --color-selection: rgba(0, 120, 255, 0.2);
+    --color-code-bg: rgba(0, 0, 0, 0.06);
+    --color-blockquote: #999;
+    --color-highlight: #fef08a;
+    --color-link: #c9901a;
+  }
+
   html, body {
     height: 100%;
     background: var(--color-bg);
@@ -80,8 +128,8 @@ function writeEditorHtml(outDir) {
   body {
     padding: 0 24px 48px;
     font-family: var(--font-body);
-    font-size: 15px;
-    line-height: 1.6;
+    font-size: 17px;
+    line-height: 1.3;
     -webkit-font-smoothing: antialiased;
   }
 
@@ -94,6 +142,9 @@ function writeEditorHtml(outDir) {
   .ProseMirror {
     outline: none;
     min-height: inherit;
+    /* Matches the native title field's cursor (MaterialTheme primary / NotesYellow
+       on Android, AccentColor on Mac) instead of the browser-engine default black. */
+    caret-color: #FFD60A;
   }
 
   .ProseMirror > * + * { margin-top: 0.75em; }
