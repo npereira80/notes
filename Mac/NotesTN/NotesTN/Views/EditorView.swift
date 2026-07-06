@@ -51,7 +51,7 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
         case "contentChanged":
             if let html = body["html"] as? String {
-                onContentChanged?(html)
+                onContentChanged?(body["title"] as? String ?? "", html)
             }
 
         case "selectionChanged":
@@ -74,8 +74,11 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
             }
 
         case "imageRequested":
-            // User pasted an image — open the resource picker (handled in NoteEditorView)
-            onImageRequested?()
+            // User pasted an image — JS sends its raw "data:...;base64,..." URI in
+            // `html` (see the paste handler in Mac/EditorBundle/src/index.ts).
+            if let dataUri = body["html"] as? String {
+                onImageRequested?(dataUri)
+            }
 
         case "openUrl":
             if let urlString = body["url"] as? String,
@@ -94,20 +97,22 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     }
 
     // MARK: Callbacks set by NoteEditorView
-    var onContentChanged: ((String) -> Void)?
-    var onImageRequested: (() -> Void)?
+    var onContentChanged: ((String, String) -> Void)?
+    var onImageRequested: ((String) -> Void)?
 
     // MARK: Commands → JS
 
-    func setContent(_ html: String) {
+    func setContent(title: String, body: String) {
         guard let wv = webView else { return }
         // JSONEncoder handles bare String top-level values safely.
         // NSJSONSerialization throws an ObjC NSException (not a Swift Error) for
         // bare strings, which bypasses try? and corrupts SwiftUI's run loop state,
         // freezing the entire UI after the first note is selected.
-        guard let data = try? JSONEncoder().encode(html),
-              let jsonStr = String(data: data, encoding: .utf8) else { return }
-        wv.evaluateJavaScript("window.NativeEditor?.setContent(\(jsonStr))")
+        guard let titleData = try? JSONEncoder().encode(title),
+              let titleJSON = String(data: titleData, encoding: .utf8),
+              let bodyData = try? JSONEncoder().encode(body),
+              let bodyJSON = String(data: bodyData, encoding: .utf8) else { return }
+        wv.evaluateJavaScript("window.NativeEditor?.setContent(\(titleJSON), \(bodyJSON))")
     }
 
     func execCommand(_ command: String, value: Any? = nil) {
@@ -180,6 +185,7 @@ final class EditorWebView: WKWebView {
 
 struct RichTextEditorView: NSViewRepresentable {
     @ObservedObject var coordinator: EditorCoordinator
+    var readOnly: Bool = false
 
     func makeNSView(context: Context) -> EditorWebView {
         let config = WKWebViewConfiguration()
@@ -197,7 +203,13 @@ struct RichTextEditorView: NSViewRepresentable {
         // debug builds (bundle is under ~/Library/Developer/Xcode/DerivedData).
         if let htmlURL = Bundle.main.url(forResource: "editor", withExtension: "html", subdirectory: nil) {
             let accessRoot = FileManager.default.homeDirectoryForCurrentUser
-            wv.loadFileURL(htmlURL, allowingReadAccessTo: accessRoot)
+            // ?readonly=1 disables ProseMirror's contentEditable entirely for a trashed
+            // note opened from Trash — see EditorBundle/src/index.ts. Appended via
+            // URLComponents since htmlURL is a file:// URL (query strings are still
+            // valid there and WKWebView preserves them for location.search).
+            var components = URLComponents(url: htmlURL, resolvingAgainstBaseURL: false)
+            if readOnly { components?.queryItems = [URLQueryItem(name: "readonly", value: "1")] }
+            wv.loadFileURL(components?.url ?? htmlURL, allowingReadAccessTo: accessRoot)
         } else {
             let fallback = "<html><body><p style='color:red'>editor.html not found in bundle</p></body></html>"
             wv.loadHTMLString(fallback, baseURL: nil)
@@ -226,7 +238,7 @@ struct EditorView: View {
     var body: some View {
         Group {
             if let note = appState.selectedNote {
-                NoteEditorView(note: note)
+                NoteEditorView(note: note, readOnly: appState.isTrashSelected)
                     .id(note.id)
             } else {
                 emptyState
@@ -255,64 +267,86 @@ struct NoteEditorView: View {
     @EnvironmentObject var appState: AppState
 
     @StateObject private var editorCoordinator = EditorCoordinator()
-    @State private var title: String
     @State private var isShowingImagePicker = false
+    @State private var showPermanentDeleteConfirm = false
     private let noteID: String
+    private let initialTitle: String
     private let initialBody: String
-    private let saveDebounce = Debouncer(delay: 0.5)
+    private let readOnly: Bool
 
-    init(note: Note) {
+    init(note: Note, readOnly: Bool = false) {
         self.noteID = note.id
+        self.initialTitle = note.title
         self.initialBody = note.body
-        _title = State(initialValue: note.title)
+        self.readOnly = readOnly
     }
 
     var body: some View {
         VStack(spacing: 0) {
 
             // MARK: Toolbar
-            EditorToolbarView(
-                coordinator: editorCoordinator,
-                onInsertImage: { isShowingImagePicker = true }
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 11)
-            .background(.windowBackground)
+            // A trashed note is read-only until restored — Restore/Delete Permanently
+            // replace the formatting toolbar entirely instead of sitting alongside it.
+            if readOnly {
+                HStack {
+                    Spacer()
+                    Button("Restore") {
+                        guard let note = trashedNote else { return }
+                        appState.restoreNote(note)
+                    }
+                    Button("Delete Permanently", role: .destructive) { showPermanentDeleteConfirm = true }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(.windowBackground)
+            } else {
+                EditorToolbarView(
+                    coordinator: editorCoordinator,
+                    onInsertImage: { isShowingImagePicker = true }
+                )
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(.windowBackground)
+            }
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 0) {
-                // Title
-                TextField("Title", text: $title)
-                    .font(.system(size: 22, weight: .bold))
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 20)
-                    .padding(.bottom, 8)
-                    .onChange(of: title) { _, _ in schedulesTitleSave() }
-                    .onSubmit { editorCoordinator.focus() }
-
-                // Rich text editor (WKWebView)
-                RichTextEditorView(coordinator: editorCoordinator)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Title now lives inside the shared ProseMirror doc (see
+            // Mac/EditorBundle's `pm-title` node), so it scrolls together with
+            // the body instead of sitting in a separate native field above it.
+            RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(.windowBackground)
         .toolbar {
-            ToolbarItem(placement: .destructiveAction) {
-                Button { appState.createNote() } label: {
-                    Image(systemName: "square.and.pencil")
+            if !readOnly {
+                ToolbarItem(placement: .destructiveAction) {
+                    Button { appState.createNote() } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .help("New Note (⌘N)")
                 }
-                .help("New Note (⌘N)")
             }
+        }
+        .confirmationDialog(
+            "Permanently delete this note?",
+            isPresented: $showPermanentDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                guard let note = trashedNote else { return }
+                appState.permanentlyDeleteNote(note)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
         }
         .onAppear {
             setupCallbacks()
         }
         .onChange(of: editorCoordinator.isReady) { _, ready in
-            if ready { editorCoordinator.setContent(initialBody) }
+            if ready { editorCoordinator.setContent(title: initialTitle, body: initialBody) }
         }
         // Image picker
         .fileImporter(
@@ -324,29 +358,32 @@ struct NoteEditorView: View {
         }
     }
 
+    private var trashedNote: Note? {
+        appState.trashedNotes.first { $0.id == noteID }
+    }
+
     // MARK: Setup
 
     private func setupCallbacks() {
-        editorCoordinator.onContentChanged = { html in
+        // Title now arrives from the same combined callback as the body (see
+        // Mac/EditorBundle's `pm-title` node) — one save path instead of the old
+        // separate immediate-body-save / debounced-title-save paths.
+        editorCoordinator.onContentChanged = { title, html in
             guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
             var updated = note
+            updated.title = title
             updated.body = html
-            updated.title = self.title
             self.appState.saveNote(updated)
         }
-        editorCoordinator.onImageRequested = {
-            isShowingImagePicker = true
-        }
-    }
-
-    // MARK: Save
-
-    private func schedulesTitleSave() {
-        saveDebounce.call {
-            guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
-            var updated = note
-            updated.title = self.title
-            self.appState.saveNote(updated)
+        editorCoordinator.onImageRequested = { dataUri in
+            guard let resource = copyDataUriIntoResources(dataUri: dataUri, noteId: noteID),
+                  let dir = DatabaseManager.shared.resourcesDirectory else { return }
+            // file:// URL that WKWebView can load (local access granted via loadFileURL)
+            editorCoordinator.insertImage(
+                src: dir.appendingPathComponent(resource.filename).absoluteString,
+                alt: resource.title,
+                resourceId: resource.id
+            )
         }
     }
 
@@ -370,6 +407,8 @@ struct NoteEditorView: View {
 
         // Save to DB and insert into editor
         let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "image/png"
+        // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
+        // synced since the server doesn't know about it.
         DatabaseManager.shared.saveResource(Resource(
             id: resourceId,
             title: url.lastPathComponent,
@@ -377,7 +416,7 @@ struct NoteEditorView: View {
             filename: "\(resourceId).\(ext)",
             fileSize: (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0,
             noteId: noteID
-        ))
+        ), dirty: true, synced: false)
 
         // file:// URL that WKWebView can load (local access granted via loadFileURL)
         editorCoordinator.insertImage(
@@ -385,6 +424,43 @@ struct NoteEditorView: View {
             alt: url.deletingPathExtension().lastPathComponent,
             resourceId: resourceId
         )
+    }
+
+    /// Counterpart to handleImagePick for the paste-from-clipboard path — the editor
+    /// bundle hands us a raw "data:image/png;base64,..." URI (see the paste handler in
+    /// Mac/EditorBundle/src/index.ts) instead of a picked file URL, since there's no
+    /// system picker involved.
+    private func copyDataUriIntoResources(dataUri: String, noteId: String) -> Resource? {
+        guard let commaIndex = dataUri.firstIndex(of: ","),
+              let dir = DatabaseManager.shared.resourcesDirectory else { return nil }
+
+        let header = dataUri[dataUri.index(dataUri.startIndex, offsetBy: "data:".count)..<commaIndex]
+        let mimeType = String(header.split(separator: ";").first ?? "image/png")
+        let base64 = String(dataUri[dataUri.index(after: commaIndex)...])
+        guard let bytes = Data(base64Encoded: base64) else { return nil }
+
+        let ext = UTType(mimeType: mimeType)?.preferredFilenameExtension ?? "png"
+        let resourceId = Note.generateId()
+        let filename = "\(resourceId).\(ext)"
+        do {
+            try bytes.write(to: dir.appendingPathComponent(filename))
+        } catch {
+            print("[Editor] Failed to write pasted image: \(error)")
+            return nil
+        }
+
+        let resource = Resource(
+            id: resourceId,
+            title: filename,
+            mimeType: mimeType,
+            filename: filename,
+            fileSize: bytes.count,
+            noteId: noteId
+        )
+        // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
+        // synced since the server doesn't know about it.
+        DatabaseManager.shared.saveResource(resource, dirty: true, synced: false)
+        return resource
     }
 }
 
@@ -396,14 +472,19 @@ struct EditorToolbarView: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            // Paragraph / Headings picker
+            // Text style picker
             Menu {
+                // "Title" reuses heading level 1 (restyled in CSS to match the note
+                // title's look) so it can be applied to any paragraph in the body.
+                Button("Title") { coordinator.execCommand("heading1") }
+                Button("Heading") { coordinator.execCommand("heading3") }
+                Button("Subheading") { coordinator.execCommand("heading4") }
                 Button("Paragraph") { coordinator.execCommand("paragraph") }
                 Divider()
-                ForEach(1...6, id: \.self) { level in
-                    Button("Heading \(level)") { coordinator.execCommand("heading\(level)") }
-                }
+                Button("Bullet List") { coordinator.execCommand("bulletList") }
+                Button("Number List") { coordinator.execCommand("orderedList") }
                 Divider()
+                Button("Monospaced") { coordinator.execCommand("code") }
                 Button("Code Block") { coordinator.execCommand("codeBlock") }
             } label: {
                 Image(systemName: "textformat")
@@ -439,12 +520,6 @@ struct EditorToolbarView: View {
             Divider().frame(height: 16)
 
             // Lists
-            FormatToggleButton(icon: "list.bullet", tooltip: "Bullet List", isActive: coordinator.selectionState.inBulletList) {
-                coordinator.execCommand("bulletList")
-            }
-            FormatToggleButton(icon: "list.number", tooltip: "Numbered List", isActive: coordinator.selectionState.inOrderedList) {
-                coordinator.execCommand("orderedList")
-            }
             FormatToggleButton(icon: "checklist", tooltip: "Task List", isActive: coordinator.selectionState.inTaskList) {
                 coordinator.execCommand("taskList")
             }
@@ -560,22 +635,6 @@ struct FormatToggleButton: View {
         .buttonStyle(.borderless)
         .help(tooltip)
         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-    }
-}
-
-// MARK: - Debouncer
-
-final class Debouncer {
-    private let delay: TimeInterval
-    private var workItem: DispatchWorkItem?
-
-    init(delay: TimeInterval) { self.delay = delay }
-
-    func call(action: @escaping () -> Void) {
-        workItem?.cancel()
-        let item = DispatchWorkItem(block: action)
-        workItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 }
 

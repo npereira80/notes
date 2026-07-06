@@ -15,6 +15,12 @@ data class Note(
     var updatedTime: Long = System.currentTimeMillis(),
     var isTodo: Boolean = false,
     var todoCompleted: Boolean = false,
+    var deletedTime: Long? = null,
+    // Not a native Joplin field (standard Joplin has no pinned-note concept) — stored
+    // in the note's own application_data JSON, a real Joplin field meant for exactly
+    // this kind of app-specific custom state, so it round-trips safely through Joplin
+    // Cloud sync. See JoplinItemSerializer/JoplinItemParser.
+    var isPinned: Boolean = false,
 ) {
     companion object {
         // Joplin-compatible: 32-char lowercase hex, no hyphens
@@ -38,5 +44,13 @@ data class Note(
                 .replace("&quot;", "\"")
                 .trim()
             return collapsed.take(160)
+        }
+
+    /** Resource id of the first image in the body, or null if there is none — used
+     * for the note list's thumbnail (mirrors Apple Notes' list row thumbnail). */
+    val firstImageResourceId: String?
+        get() {
+            val imgTag = Regex("<img\\b[^>]*>").find(body)?.value ?: return null
+            return Regex("""data-resource-id="([^"]*)"""").find(imgTag)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
         }
 }

@@ -6,6 +6,16 @@ import androidx.compose.ui.graphics.Color
 // NoteListView.swift `notesYellow`).
 val NotesYellow = Color(0xFFFFD60A)
 
+// Note list backgrounds + editor topbar/toolbar. Light values match iOS's
+// systemGroupedBackground / secondarySystemGroupedBackground; dark values are
+// their standard iOS dark-mode counterparts.
+val GroupedBackgroundLight = Color(0xFFF2F2F6)
+val GroupedBackgroundDark = Color(0xFF1C1C1E)
+val CardBackgroundLight = Color.White
+val CardBackgroundDark = Color(0xFF2C2C2E)
+val SearchFieldBackgroundLight = Color(0xFFFCFCFC)
+val SearchFieldBackgroundDark = Color(0xFF2C2C2E)
+
 val Purple80 = Color(0xFFD0BCFF)
 val PurpleGrey80 = Color(0xFFCCC2DC)
 val Pink80 = Color(0xFFEFB8C8)

@@ -28,8 +28,8 @@ class EditorCoordinator {
     // Set by EditorWebView's AndroidView factory, cleared on dispose.
     var webView: WebView? = null
 
-    var onContentChanged: ((String) -> Unit)? = null
-    var onImageRequested: (() -> Unit)? = null
+    var onContentChanged: ((title: String, body: String) -> Unit)? = null
+    var onImageRequested: ((dataUri: String) -> Unit)? = null
     var onOpenUrl: ((String) -> Unit)? = null
 
     private val jsonCoder = Json { ignoreUnknownKeys = true }
@@ -43,9 +43,9 @@ class EditorCoordinator {
 
         when (message.type) {
             "ready" -> isReady = true
-            "contentChanged" -> message.html?.let { onContentChanged?.invoke(it) }
+            "contentChanged" -> message.html?.let { onContentChanged?.invoke(message.title ?: "", it) }
             "selectionChanged" -> message.selectionState?.let { selectionState = it }
-            "imageRequested" -> onImageRequested?.invoke()
+            "imageRequested" -> message.html?.let { onImageRequested?.invoke(it) }
             "openUrl" -> message.url?.let { onOpenUrl?.invoke(it) }
             "log" -> Log.d("EditorJS", message.message ?: "")
         }
@@ -53,10 +53,11 @@ class EditorCoordinator {
 
     // MARK: Commands → JS
 
-    fun setContent(html: String) {
+    fun setContent(title: String, body: String) {
         val wv = webView ?: return
-        val encoded = jsonCoder.encodeToString(html)
-        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.setContent($encoded)", null) }
+        val encodedTitle = jsonCoder.encodeToString(title)
+        val encodedBody = jsonCoder.encodeToString(body)
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.setContent($encodedTitle, $encodedBody)", null) }
     }
 
     fun execCommand(command: String, value: JsonObject? = null) {
@@ -70,6 +71,13 @@ class EditorCoordinator {
             wv.requestFocus()
             wv.evaluateJavascript(js, null)
         }
+    }
+
+    // Collapses the selection to a caret before opening the Android-only "Text
+    // Style" dropdown — see collapseSelection's doc comment in index.ts.
+    fun collapseSelection() {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.collapseSelection()", null) }
     }
 
     fun focus() {

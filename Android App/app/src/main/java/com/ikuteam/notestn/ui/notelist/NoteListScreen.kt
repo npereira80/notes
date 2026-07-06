@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -37,12 +40,14 @@ import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
@@ -54,15 +59,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
+import com.ikuteam.notestn.ui.theme.CardBackgroundDark
+import com.ikuteam.notestn.ui.theme.CardBackgroundLight
+import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
+import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
 import com.ikuteam.notestn.ui.theme.NotesYellow
+import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
+import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
 import com.ikuteam.notestn.viewmodel.NotesViewModel
 import java.time.Instant
 import java.time.LocalDate
@@ -135,19 +150,32 @@ private fun rowDateString(note: Note, today: LocalDate): String {
 fun NoteListScreen(
     viewModel: NotesViewModel,
     onNoteClick: (Note) -> Unit,
+    isTrash: Boolean = false,
     selectedNoteId: String? = null,
     focusSearchOnLaunch: Boolean = false,
+    onOpenSidebar: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val notes by viewModel.notes.collectAsStateWithLifecycle()
+    val liveNotes by viewModel.notes.collectAsStateWithLifecycle()
+    val trashedNotes by viewModel.trashedNotes.collectAsStateWithLifecycle()
+    val trashedFolders by viewModel.trashedFolders.collectAsStateWithLifecycle()
+    val notes = if (isTrash) trashedNotes else liveNotes
     val searchText by viewModel.searchText.collectAsStateWithLifecycle()
     val selectedFolder by viewModel.selectedFolder.collectAsStateWithLifecycle()
     val isFocusingSearch by viewModel.isFocusingSearch.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncError by viewModel.syncError.collectAsStateWithLifecycle()
+    val darkTheme = isSystemInDarkTheme()
+    val groupedBackground = if (darkTheme) GroupedBackgroundDark else GroupedBackgroundLight
+    val cardBackground = if (darkTheme) CardBackgroundDark else CardBackgroundLight
+    val searchFieldBackground = if (darkTheme) SearchFieldBackgroundDark else SearchFieldBackgroundLight
+    var confirmEmptyTrash by remember { mutableStateOf(false) }
 
     val today = remember { LocalDate.now(zone) }
     val currentYear = today.year
 
     val navTitle = when {
+        isTrash -> "Trash"
         searchText.isNotEmpty() -> "Search Results"
         else -> selectedFolder?.title ?: "All Notes"
     }
@@ -158,7 +186,7 @@ fun NoteListScreen(
 
     Scaffold(
         modifier = modifier,
-        containerColor = Color(0xFFF2F2F6),
+        containerColor = groupedBackground,
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
@@ -171,11 +199,27 @@ fun NoteListScreen(
                         )
                     }
                 },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color(0xFFF2F2F6)),
+                navigationIcon = {
+                    // The app opens straight into the last-used notebook's note list
+                    // (see NotesNavHost) rather than the notebooks list, so this is
+                    // the only way back to it.
+                    if (onOpenSidebar != null) {
+                        IconButton(onClick = onOpenSidebar) {
+                            Icon(Icons.Filled.Menu, contentDescription = "Notebooks")
+                        }
+                    }
+                },
+                actions = {
+                    if (isTrash && (trashedNotes.isNotEmpty() || trashedFolders.isNotEmpty())) {
+                        TextButton(onClick = { confirmEmptyTrash = true }) { Text("Empty Trash") }
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = groupedBackground),
             )
         },
         floatingActionButtonPosition = FabPosition.Center,
         floatingActionButton = {
+            // Notes can't be created directly in Trash — only search is offered there.
             FloatingSearchAndAddBar(
                 searchText = searchText,
                 onSearchTextChange = { viewModel.search(it) },
@@ -183,10 +227,39 @@ fun NoteListScreen(
                 requestFocus = isFocusingSearch || focusSearchOnLaunch,
                 onFocusConsumed = { viewModel.consumeFocusSearch() },
                 onNewNote = { viewModel.createNote() },
+                showAddButton = !isTrash,
+                fieldBackground = searchFieldBackground,
             )
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            if (isSyncing) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            if (syncError != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Sync failed: $syncError",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { viewModel.clearSyncError() }) { Text("Dismiss") }
+                }
+            }
+            PullToRefreshBox(
+                isRefreshing = isSyncing,
+                // Plain sync, not force — force skips the local-vs-remote timestamp
+                // check entirely (see JoplinSyncEngine.upsertNote), which would let a
+                // pull-to-refresh run right after a not-yet-pushed local delete
+                // overwrite it with the still-undeleted server copy, undoing it.
+                onRefresh = { viewModel.syncNow() },
+                modifier = Modifier.weight(1f),
+            ) {
             if (notes.isEmpty()) {
                 EmptyState(isSearching = searchText.isNotEmpty(), onCreateNote = { viewModel.createNote() })
             } else if (searchText.isNotEmpty()) {
@@ -199,19 +272,102 @@ fun NoteListScreen(
                             note = note,
                             dateString = rowDateString(note, today),
                             selected = note.id == selectedNoteId,
+                            isTrash = isTrash,
                             onClick = { onNoteClick(note) },
                             onDelete = { viewModel.deleteNote(note) },
+                            onRestore = { viewModel.restoreNote(note) },
+                            onPermanentDelete = { viewModel.permanentlyDeleteNote(note) },
+                            onTogglePin = { viewModel.togglePin(note) },
                         )
                     }
                 }
             } else {
-                val grouped = notes.groupBy { groupFor(it, today) }
+                // Pinning only applies to live notes — pulled out of their date group
+                // into their own section (first, like Apple Notes) so a note doesn't
+                // appear twice.
+                val pinnedNotes = if (isTrash) emptyList() else notes.filter { it.isPinned }.sortedByDescending { it.updatedTime }
+                val unpinnedNotes = if (isTrash) notes else notes.filterNot { it.isPinned }
+                val grouped = unpinnedNotes.groupBy { groupFor(it, today) }
                     .toSortedMap(compareBy({ it.order }, { (it as? NoteGroup.Month)?.year?.let { y -> -y } ?: 0 }, { (it as? NoteGroup.Month)?.month?.let { m -> -m } ?: 0 }))
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = listBottomPadding),
                 ) {
+                    if (pinnedNotes.isNotEmpty()) {
+                        item(key = "header-pinned") {
+                            Text(
+                                "Pinned",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
+                            )
+                        }
+                        item(key = "card-pinned") {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                color = cardBackground,
+                            ) {
+                                Column {
+                                    pinnedNotes.forEachIndexed { index, note ->
+                                        NoteRow(
+                                            note = note,
+                                            dateString = rowDateString(note, today),
+                                            selected = note.id == selectedNoteId,
+                                            isTrash = false,
+                                            onClick = { onNoteClick(note) },
+                                            onDelete = { viewModel.deleteNote(note) },
+                                            onRestore = { viewModel.restoreNote(note) },
+                                            onPermanentDelete = { viewModel.permanentlyDeleteNote(note) },
+                                            onTogglePin = { viewModel.togglePin(note) },
+                                        )
+                                        if (index != pinnedNotes.lastIndex) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                                                thickness = 0.5.dp,
+                                                color = MaterialTheme.colorScheme.outlineVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (isTrash && trashedFolders.isNotEmpty()) {
+                        item(key = "header-trashed-notebooks") {
+                            Text(
+                                "Notebooks",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
+                            )
+                        }
+                        item(key = "card-trashed-notebooks") {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                color = cardBackground,
+                            ) {
+                                Column {
+                                    trashedFolders.forEachIndexed { index, folder ->
+                                        TrashedFolderRow(
+                                            title = folder.title,
+                                            onRestore = { viewModel.restoreFolder(folder) },
+                                            onPermanentDelete = { viewModel.permanentlyDeleteFolder(folder) },
+                                        )
+                                        if (index != trashedFolders.lastIndex) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                                                thickness = 0.5.dp,
+                                                color = MaterialTheme.colorScheme.outlineVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     grouped.forEach { (group, groupNotes) ->
                         item(key = "header-${group.hashCode()}") {
                             Text(
@@ -227,7 +383,7 @@ fun NoteListScreen(
                             Surface(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                                 shape = RoundedCornerShape(14.dp),
-                                color = Color.White,
+                                color = cardBackground,
                             ) {
                                 Column {
                                     groupNotes.forEachIndexed { index, note ->
@@ -235,8 +391,12 @@ fun NoteListScreen(
                                             note = note,
                                             dateString = rowDateString(note, today),
                                             selected = note.id == selectedNoteId,
+                                            isTrash = isTrash,
                                             onClick = { onNoteClick(note) },
                                             onDelete = { viewModel.deleteNote(note) },
+                                            onRestore = { viewModel.restoreNote(note) },
+                                            onPermanentDelete = { viewModel.permanentlyDeleteNote(note) },
+                                            onTogglePin = { viewModel.togglePin(note) },
                                         )
                                         if (index != groupNotes.lastIndex) {
                                             HorizontalDivider(
@@ -252,7 +412,22 @@ fun NoteListScreen(
                     }
                 }
             }
+            }
         }
+    }
+
+    if (confirmEmptyTrash) {
+        AlertDialog(
+            onDismissRequest = { confirmEmptyTrash = false },
+            title = { Text("Empty Trash") },
+            text = { Text("Permanently delete everything in Trash? This can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.emptyTrash(); confirmEmptyTrash = false }) { Text("Empty Trash") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmEmptyTrash = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -267,6 +442,8 @@ private fun FloatingSearchAndAddBar(
     requestFocus: Boolean,
     onFocusConsumed: () -> Unit,
     onNewNote: () -> Unit,
+    fieldBackground: Color,
+    showAddButton: Boolean = true,
 ) {
     Row(
         modifier = Modifier
@@ -283,20 +460,23 @@ private fun FloatingSearchAndAddBar(
             onClear = onClear,
             requestFocus = requestFocus,
             onFocusConsumed = onFocusConsumed,
+            background = fieldBackground,
             modifier = Modifier.weight(1f),
         )
-        FloatingActionButton(
-            onClick = onNewNote,
-            shape = RoundedCornerShape(14.dp),
-            // Default FAB elevation (6dp/6dp/6dp/8dp), halved.
-            elevation = FloatingActionButtonDefaults.elevation(
-                defaultElevation = 3.dp,
-                pressedElevation = 3.dp,
-                focusedElevation = 3.dp,
-                hoveredElevation = 4.dp,
-            ),
-        ) {
-            Icon(Icons.Default.Add, contentDescription = "New Note")
+        if (showAddButton) {
+            FloatingActionButton(
+                onClick = onNewNote,
+                shape = RoundedCornerShape(14.dp),
+                // Default FAB elevation (6dp/6dp/6dp/8dp), halved.
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 3.dp,
+                    pressedElevation = 3.dp,
+                    focusedElevation = 3.dp,
+                    hoveredElevation = 4.dp,
+                ),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "New Note")
+            }
         }
     }
 }
@@ -309,6 +489,7 @@ private fun FloatingSearchField(
     onClear: () -> Unit,
     requestFocus: Boolean,
     onFocusConsumed: () -> Unit,
+    background: Color,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -326,7 +507,7 @@ private fun FloatingSearchField(
     Surface(
         modifier = modifier.height(56.dp),
         shape = RoundedCornerShape(14.dp),
-        color = Color(0xFFFCFCFC),
+        color = background,
         border = BorderStroke(0.5.dp, Color.Gray.copy(alpha = 0.5f)),
         tonalElevation = 3.dp,
         shadowElevation = 3.dp,
@@ -369,18 +550,27 @@ private fun NoteRow(
     selected: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
+    isTrash: Boolean = false,
+    onRestore: () -> Unit = {},
+    onPermanentDelete: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val thumbnailFile = remember(note.id, note.body) {
+        note.firstImageResourceId?.let { DatabaseManager.shared.resourceLocalFile(it) }
+    }
 
     Box {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
                 .background(if (selected) NotesYellow else Color.Transparent)
                 .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+        Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (note.isTodo) {
                     Icon(
@@ -410,8 +600,93 @@ private fun NoteRow(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
+            if (thumbnailFile != null) {
+                AsyncImage(
+                    model = thumbnailFile,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(14.dp)),
+                )
+            }
+        }
         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-            DropdownMenuItem(text = { Text("Delete Note") }, onClick = {
+            if (isTrash) {
+                DropdownMenuItem(text = { Text("Restore") }, onClick = {
+                    showMenu = false
+                    onRestore()
+                })
+                DropdownMenuItem(text = { Text("Delete Permanently") }, onClick = {
+                    showMenu = false
+                    confirmDelete = true
+                })
+            } else {
+                DropdownMenuItem(text = { Text(if (note.isPinned) "Unpin Note" else "Pin Note") }, onClick = {
+                    showMenu = false
+                    onTogglePin()
+                })
+                DropdownMenuItem(text = { Text("Delete Note") }, onClick = {
+                    showMenu = false
+                    confirmDelete = true
+                })
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(if (isTrash) "Delete Permanently" else "Delete Note") },
+            text = {
+                Text(
+                    if (isTrash) {
+                        "Permanently delete \"${note.title.ifEmpty { "Untitled" }}\"? This can't be undone."
+                    } else {
+                        "Move \"${note.title.ifEmpty { "Untitled" }}\" to Trash?"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (isTrash) onPermanentDelete() else onDelete()
+                    confirmDelete = false
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TrashedFolderRow(
+    title: String,
+    onRestore: () -> Unit,
+    onPermanentDelete: () -> Unit,
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = {}, onLongClick = { showMenu = true })
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+        }
+        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+            DropdownMenuItem(text = { Text("Restore") }, onClick = {
+                showMenu = false
+                onRestore()
+            })
+            DropdownMenuItem(text = { Text("Delete Permanently") }, onClick = {
                 showMenu = false
                 confirmDelete = true
             })
@@ -421,10 +696,10 @@ private fun NoteRow(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete Note") },
-            text = { Text("Delete \"${note.title.ifEmpty { "Untitled" }}\"? This can't be undone.") },
+            title = { Text("Delete Permanently") },
+            text = { Text("Permanently delete \"$title\" and all its notes? This can't be undone.") },
             confirmButton = {
-                TextButton(onClick = { onDelete(); confirmDelete = false }) { Text("Delete") }
+                TextButton(onClick = { onPermanentDelete(); confirmDelete = false }) { Text("Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }

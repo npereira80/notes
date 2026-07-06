@@ -14732,7 +14732,22 @@
   // src/schema.ts
   var nodes = {
     doc: {
-      content: "block+"
+      // Every doc has exactly one title node, always first, followed by the note
+      // body. This lets the title scroll in the same element/scroll-context as
+      // the body instead of living in a separate native text field.
+      content: "title block*"
+    },
+    // The note's title, as the doc's mandatory first node. A plain div (not an
+    // h1) so it can never collide with the `heading` node's h1-h6 parseDOM
+    // rules below. No marks — the native title field was always plain text.
+    title: {
+      content: "inline*",
+      marks: "",
+      defining: true,
+      parseDOM: [{ tag: "div.pm-title" }],
+      toDOM() {
+        return ["div", { class: "pm-title" }, 0];
+      }
     },
     paragraph: {
       group: "block",
@@ -14771,6 +14786,9 @@
       })),
       toDOM(node) {
         const attrs = {};
+        if (node.attrs.level === 1) {
+          return [`h${node.attrs.level}`, attrs, 0];
+        }
         if (node.attrs.collapsed) attrs["data-collapsed"] = "";
         return [
           `h${node.attrs.level}`,
@@ -15275,6 +15293,23 @@
       return false;
     }
   }
+  var moveFromTitleToBody = (state, dispatch) => {
+    const { $from } = state.selection;
+    if ($from.parent.type !== schema_default.nodes.title) return false;
+    if (dispatch) {
+      const afterTitle = state.doc.firstChild.nodeSize;
+      const sel = Selection.near(state.doc.resolve(afterTitle), 1);
+      dispatch(state.tr.setSelection(sel).scrollIntoView());
+    }
+    return true;
+  };
+  var guardBackspaceIntoTitle = (state, dispatch) => {
+    const { $from, empty: empty2 } = state.selection;
+    if (!empty2) return false;
+    const afterTitle = state.doc.firstChild.nodeSize;
+    if ($from.pos === afterTitle + 1 && $from.parentOffset === 0) return true;
+    return false;
+  };
   function buildKeymap() {
     const { list_item, task_list_item } = schema_default.nodes;
     const listItemTypes = [list_item, task_list_item];
@@ -15288,8 +15323,9 @@
       // List indentation
       "Tab": (state, dispatch, view) => commands.indent(view),
       "Shift-Tab": (state, dispatch, view) => commands.outdent(view),
-      // Enter in list items
+      // Enter in list items (title-to-body handoff checked first)
       "Enter": chainCommands(
+        moveFromTitleToBody,
         splitListItem(task_list_item),
         splitListItem(list_item),
         newlineInCode,
@@ -15298,6 +15334,7 @@
       // Lift out with Backspace — only when cursor is at the very start of an empty list item.
       // Without the parentOffset guard, liftListItem fires mid-word and removes list formatting.
       "Backspace": chainCommands(
+        guardBackspaceIntoTitle,
         (state, dispatch) => {
           if (state.selection.$from.parentOffset > 0) return false;
           return liftListItem(task_list_item)(state, dispatch);
@@ -15374,22 +15411,28 @@
     };
   }
   var serializer = DOMSerializer.fromSchema(schema_default);
-  function stateToHTML(state) {
-    const fragment = serializer.serializeFragment(state.doc.content);
+  function stateToParts(state) {
+    const titleNode = state.doc.firstChild;
+    const bodyFragment = state.doc.content.cut(titleNode.nodeSize);
     const div = document.createElement("div");
-    div.appendChild(fragment);
-    return div.innerHTML;
+    div.appendChild(serializer.serializeFragment(bodyFragment));
+    return { title: titleNode.textContent, body: div.innerHTML };
   }
   function createEditor() {
     const domEl = document.getElementById("editor");
     if (!domEl) throw new Error("#editor element not found");
+    const isReadOnly = /[?&]readonly=1(&|$)/.test(location.search);
+    const isAndroid = /[?&]platform=android(&|$)/.test(location.search);
+    if (isAndroid) document.body.classList.add("pm-android");
+    let lastTitle = "";
     let lastHTML = "";
     let selectionDebounce = null;
     const notifyContent = (state2) => {
-      const html = stateToHTML(state2);
-      if (html !== lastHTML) {
-        lastHTML = html;
-        postToNative({ type: "contentChanged", html });
+      const { title, body } = stateToParts(state2);
+      if (title !== lastTitle || body !== lastHTML) {
+        lastTitle = title;
+        lastHTML = body;
+        postToNative({ type: "contentChanged", title, html: body });
       }
     };
     const notifySelection = (state2) => {
@@ -15448,6 +15491,20 @@
             }
           }
         }),
+        // Placeholder text ("Title") shown when the title node is empty.
+        new Plugin({
+          props: {
+            decorations(state2) {
+              const titleNode = state2.doc.firstChild;
+              if (titleNode && titleNode.type === schema_default.nodes.title && titleNode.content.size === 0) {
+                return DecorationSet.create(state2.doc, [
+                  Decoration.node(0, titleNode.nodeSize, { class: "pm-title-empty" })
+                ]);
+              }
+              return DecorationSet.empty;
+            }
+          }
+        }),
         // Collapse/expand sections under headings
         new Plugin({
           props: {
@@ -15459,7 +15516,7 @@
               const decos = [];
               for (let i = 0; i < topLevel.length; i++) {
                 const { node, offset } = topLevel[i];
-                if (node.type !== schema_default.nodes.heading || !node.attrs.collapsed) continue;
+                if (node.type !== schema_default.nodes.heading || node.attrs.level === 1 || !node.attrs.collapsed) continue;
                 const level = node.attrs.level;
                 for (let j = i + 1; j < topLevel.length; j++) {
                   const next = topLevel[j];
@@ -15469,11 +15526,25 @@
                   }));
                 }
               }
+              const { $from } = state2.selection;
+              for (let d = $from.depth; d >= 0; d--) {
+                const node = $from.node(d);
+                if (node.type === schema_default.nodes.heading && node.attrs.level !== 1) {
+                  const pos = $from.before(d);
+                  decos.push(Decoration.node(pos, pos + node.nodeSize, { class: "pm-heading-focused" }));
+                  break;
+                }
+              }
               return DecorationSet.create(state2.doc, decos);
             },
-            // Toggle collapsed state when the arrow span is clicked.
+            // Toggle collapsed state when the arrow span is tapped/clicked.
+            // pointerdown (not mousedown) — mousedown on a contenteditable="false"
+            // island inside a contenteditable region relies on the browser
+            // synthesizing a mouse event from a touch, which Chromium/Android
+            // WebView doesn't always do reliably (unlike WebKit/Mac). pointerdown
+            // is fired natively for both touch and mouse on both engines.
             handleDOMEvents: {
-              mousedown(view2, event) {
+              pointerdown(view2, event) {
                 const target = event.target;
                 if (!target.classList.contains("pm-heading-arrow")) return false;
                 event.preventDefault();
@@ -15503,8 +15574,9 @@
         // Handle arrow clicks in toggle/details blocks
         new Plugin({
           props: {
+            // pointerdown — see the heading-arrow handler above for why.
             handleDOMEvents: {
-              mousedown(view2, event) {
+              pointerdown(view2, event) {
                 const target = event.target;
                 if (!target.classList.contains("pm-toggle-arrow")) return false;
                 event.preventDefault();
@@ -15538,8 +15610,9 @@
         // Handle checkbox clicks in task list items
         new Plugin({
           props: {
+            // pointerdown — see the heading-arrow handler above for why.
             handleDOMEvents: {
-              mousedown(view2, event) {
+              pointerdown(view2, event) {
                 const target = event.target;
                 if (target.tagName === "INPUT" && target.getAttribute("type") === "checkbox") {
                   event.preventDefault();
@@ -15566,10 +15639,8 @@
                     const reader = new FileReader();
                     reader.onload = (e) => {
                       var _a2;
-                      const src = (_a2 = e.target) == null ? void 0 : _a2.result;
-                      if (src) {
-                        commands.image(view2, { src });
-                      }
+                      const dataUri = (_a2 = e.target) == null ? void 0 : _a2.result;
+                      if (dataUri) postToNative({ type: "imageRequested", html: dataUri });
                     };
                     reader.readAsDataURL(file);
                   }
@@ -15584,7 +15655,8 @@
     });
     const view = new EditorView(domEl, {
       state,
-      dispatchTransaction: (tr) => dispatchWithNotify(view)(tr)
+      dispatchTransaction: (tr) => dispatchWithNotify(view)(tr),
+      editable: () => !isReadOnly
     });
     notifySelection(view.state);
     return view;
@@ -15598,13 +15670,15 @@
       return;
     }
     const bridge = {
-      setContent(html) {
+      setContent(title, body) {
+        const titleNode = schema_default.nodes.title.create(null, title ? schema_default.text(title) : void 0);
         const parser = DOMParser2.fromSchema(schema_default);
         const domParser = new DOMParser();
-        const doc3 = domParser.parseFromString(html || "<p></p>", "text/html");
-        const parsed = parser.parse(doc3.body, { preserveWhitespace: true });
+        const dom = domParser.parseFromString(body || "<p></p>", "text/html");
+        const bodySlice = parser.parseSlice(dom.body, { preserveWhitespace: true });
+        const content = bodySlice.content.addToStart(titleNode);
         const newState = EditorState.create({
-          doc: parsed,
+          doc: schema_default.nodes.doc.create(null, content),
           plugins: view.state.plugins
         });
         view.updateState(newState);
@@ -15627,7 +15701,18 @@
         view.dom.blur();
       },
       getHTML() {
-        return stateToHTML(view.state);
+        return stateToParts(view.state).body;
+      },
+      // Collapses the current selection to a caret at its head, staying in the
+      // same block. Used by Android before opening the "Text Style" dropdown:
+      // a real range selection triggers Android's native floating Cut/Copy/Paste
+      // toolbar, which renders on top of that dropdown. The block-level commands
+      // offered there (heading/paragraph/list/etc.) only need the caret inside
+      // the target block, not a preserved range, so collapsing first is safe and
+      // makes Android dismiss its native toolbar on its own.
+      collapseSelection() {
+        const { state, dispatch } = view;
+        dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(state.selection.head))));
       }
     };
     window.NativeEditor = bridge;

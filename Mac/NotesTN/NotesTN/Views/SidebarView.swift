@@ -1,5 +1,9 @@
 import SwiftUI
 
+// Sentinel tag for the Trash row's List(selection:) binding — not a real folder id,
+// so it can never collide with one (Joplin-compatible folder ids are 32-char hex).
+private let trashSentinel = "__trash__"
+
 struct SidebarView: View {
     @EnvironmentObject var appState: AppState
     @State private var newFolderName: String = ""
@@ -13,7 +17,16 @@ struct SidebarView: View {
             // MARK: All Notes
             Label("All Notes", systemImage: "note.text")
                 .tag(Optional<String>.none)
-                .foregroundStyle(appState.selectedFolderID == nil ? .primary : .secondary)
+                .foregroundStyle(appState.selectedFolderID == nil && !appState.isTrashSelected ? .primary : .secondary)
+
+            // MARK: Trash
+            // Routed through the same selectedFolderID tag/selection mechanism as every
+            // other row (via a sentinel value) rather than a separate tap gesture, since
+            // List(selection:) rows on macOS don't reliably forward taps to a plain
+            // onTapGesture underneath their own selection handling.
+            Label("Trash", systemImage: "trash")
+                .tag(Optional(trashSentinel))
+                .foregroundStyle(appState.isTrashSelected ? .primary : .secondary)
 
             // MARK: Notebooks
             Section("Notebooks") {
@@ -66,8 +79,20 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .onChange(of: appState.selectedFolderID) { _, newValue in
-            let folder = appState.folders.first { $0.id == newValue }
-            appState.selectFolder(folder)
+            if newValue == trashSentinel {
+                appState.selectTrash()
+            } else {
+                let folder = appState.folders.first { $0.id == newValue }
+                appState.selectFolder(folder)
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            if appState.isSyncing {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             HStack {

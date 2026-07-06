@@ -33,6 +33,7 @@ import com.ikuteam.notestn.data.DatabaseManager
 fun EditorWebView(
     coordinator: EditorCoordinator,
     darkTheme: Boolean,
+    readOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     AndroidView(
@@ -93,8 +94,15 @@ fun EditorWebView(
                 coordinator.webView = this
                 // ?theme= is read by a synchronous bootstrap script in editor.html's
                 // <head>, before first paint — avoids a flash of the wrong theme.
+                // ?readonly=1 disables ProseMirror's contentEditable entirely for a
+                // trashed note opened from Trash — see EditorBundle/src/index.ts.
+                // ?platform=android adds extra bottom padding (body.pm-android in
+                // build.mjs) so the last line of a long note can scroll clear of the
+                // floating formatting toolbar/keyboard.
                 // See Mac/EditorBundle/build.mjs.
-                loadUrl("https://appassets.androidplatform.net/assets/editor.html?theme=${if (darkTheme) "dark" else "light"}")
+                val themeParam = if (darkTheme) "dark" else "light"
+                val readOnlyParam = if (readOnly) "&readonly=1" else ""
+                loadUrl("https://appassets.androidplatform.net/assets/editor.html?theme=$themeParam$readOnlyParam&platform=android")
             }
         },
         update = { webView -> applyDarkMode(webView, darkTheme) },

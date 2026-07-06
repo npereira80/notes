@@ -10,6 +10,12 @@ struct Note: Identifiable, Hashable, Equatable {
     var updatedTime: Date
     var isTodo: Bool
     var todoCompleted: Bool
+    var deletedTime: Date?   // nil = not trashed
+    // Not a native Joplin field (standard Joplin has no pinned-note concept) — stored
+    // in the note's own application_data JSON, a real Joplin field meant for exactly
+    // this kind of app-specific custom state, so it round-trips safely through Joplin
+    // Cloud sync. See JoplinItemSerializer/JoplinItemParser.
+    var isPinned: Bool
 
     init(
         id: String = Note.generateId(),
@@ -19,7 +25,9 @@ struct Note: Identifiable, Hashable, Equatable {
         createdTime: Date = Date(),
         updatedTime: Date = Date(),
         isTodo: Bool = false,
-        todoCompleted: Bool = false
+        todoCompleted: Bool = false,
+        deletedTime: Date? = nil,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.folderId = folderId
@@ -29,6 +37,8 @@ struct Note: Identifiable, Hashable, Equatable {
         self.updatedTime = updatedTime
         self.isTodo = isTodo
         self.todoCompleted = todoCompleted
+        self.deletedTime = deletedTime
+        self.isPinned = isPinned
     }
 
     // Joplin uses 32-char lowercase hex IDs
@@ -55,5 +65,18 @@ struct Note: Identifiable, Hashable, Equatable {
             .replacingOccurrences(of: "&quot;", with: "\"")
             .trimmingCharacters(in: .whitespaces)
         return String(collapsed.prefix(160))
+    }
+
+    // Resource id of the first image in the body, or nil if there is none — used
+    // for the note list's thumbnail (mirrors Apple Notes' list row thumbnail).
+    var firstImageResourceId: String? {
+        guard let imgRange = body.range(of: "<img\\b[^>]*>", options: .regularExpression) else { return nil }
+        let imgTag = String(body[imgRange])
+        guard let idRange = imgTag.range(of: "data-resource-id=\"([^\"]*)\"", options: .regularExpression) else { return nil }
+        let attr = String(imgTag[idRange])
+        let value = attr
+            .replacingOccurrences(of: "data-resource-id=\"", with: "")
+            .replacingOccurrences(of: "\"", with: "")
+        return value.isEmpty ? nil : value
     }
 }

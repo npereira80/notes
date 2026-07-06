@@ -13,6 +13,9 @@ navigationCompose = "2.9.8"
 material3WindowSizeClass = "1.4.0"
 webkit = "1.16.0"
 kotlinxSerializationJson = "1.10.0"
+okhttp = "5.4.0"
+jsoup = "1.18.3"
+coil = "2.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +39,9 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 material3WindowSizeClass = { group = "androidx.compose.material3", name = "material3-window-size-class", version.ref = "material3WindowSizeClass" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

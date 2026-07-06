@@ -50,7 +50,9 @@ final class DatabaseManager {
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL DEFAULT "",
             created_time INTEGER NOT NULL,
-            updated_time INTEGER NOT NULL
+            updated_time INTEGER NOT NULL,
+            is_dirty INTEGER NOT NULL DEFAULT 0,
+            is_synced INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS folders_title ON folders (title);
@@ -68,7 +70,9 @@ final class DatabaseManager {
             todo_due INTEGER NOT NULL DEFAULT 0,
             todo_completed INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT "",
-            source_application TEXT NOT NULL DEFAULT "com.ikuteam.NotesTN"
+            source_application TEXT NOT NULL DEFAULT "com.ikuteam.NotesTN",
+            is_dirty INTEGER NOT NULL DEFAULT 0,
+            is_synced INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS notes_parent_id ON notes (parent_id);
@@ -82,7 +86,9 @@ final class DatabaseManager {
             filename TEXT NOT NULL DEFAULT "",
             file_size INTEGER NOT NULL DEFAULT 0,
             created_time INTEGER NOT NULL,
-            updated_time INTEGER NOT NULL
+            updated_time INTEGER NOT NULL,
+            is_dirty INTEGER NOT NULL DEFAULT 0,
+            is_synced INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS resources_updated_time ON resources (updated_time);
@@ -91,6 +97,11 @@ final class DatabaseManager {
             note_id TEXT NOT NULL,
             resource_id TEXT NOT NULL,
             PRIMARY KEY (note_id, resource_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS pending_deletes (
+            id TEXT PRIMARY KEY,
+            item_type TEXT NOT NULL
         )
         """
 
@@ -100,10 +111,48 @@ final class DatabaseManager {
             exec(stmt)
         }
 
+        // Adds is_dirty/is_synced to databases created before push sync existed. Checked
+        // first (rather than just always running ALTER TABLE) so this doesn't log a
+        // benign "duplicate column" error on every single launch once already applied.
+        addColumnIfMissing(table: "folders", column: "is_dirty", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(table: "folders", column: "is_synced", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(table: "notes", column: "is_dirty", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(table: "notes", column: "is_synced", definition: "INTEGER NOT NULL DEFAULT 0")
+        // 0 = not trashed (matches Joplin's own deleted_time convention) — mapped to/from
+        // Note.deletedTime / Folder.deletedTime's Date? at the app layer.
+        addColumnIfMissing(table: "folders", column: "deleted_time", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(table: "notes", column: "deleted_time", definition: "INTEGER NOT NULL DEFAULT 0")
+        // Not a native Joplin column — mirrors the pinned flag we stash in each note's
+        // application_data on the server (see JoplinItemSerializer/Parser).
+        addColumnIfMissing(table: "notes", column: "is_pinned", definition: "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(table: "resources", column: "is_dirty", definition: "INTEGER NOT NULL DEFAULT 0")
+        let resourcesSyncColumnAdded = addColumnIfMissing(table: "resources", column: "is_synced", definition: "INTEGER NOT NULL DEFAULT 0")
+        if resourcesSyncColumnAdded {
+            // Existing rows predate this column and could be either pulled-from-server
+            // or locally-inserted-but-never-pushed — we can't tell which after the fact.
+            // Default to "already synced" (safer: guarantees a later removal queues a
+            // remote delete) rather than "dirty" (which would just re-push identical
+            // bytes the server likely already has for most rows).
+            exec("UPDATE resources SET is_synced = 1")
+        }
+
         // Ensure resources directory exists
         if let dir = resourcesDirectory {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+    }
+
+    /// Returns whether the column was actually added (false if it already existed).
+    @discardableResult
+    private func addColumnIfMissing(table: String, column: String, definition: String) -> Bool {
+        var exists = false
+        withStatement("PRAGMA table_info(\(table))") { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if string(stmt, 1) == column { exists = true }
+            }
+        }
+        if !exists { exec("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)") }
+        return !exists
     }
 
     // MARK: - Resources directory
@@ -120,34 +169,97 @@ final class DatabaseManager {
     // MARK: - Folders
 
     func fetchFolders() -> [Folder] {
-        let sql = "SELECT id, title, created_time, updated_time FROM folders ORDER BY title ASC"
+        let sql = "SELECT id, title, created_time, updated_time, deleted_time FROM folders WHERE deleted_time = 0 ORDER BY title ASC"
         var folders: [Folder] = []
 
         withStatement(sql) { stmt in
             while sqlite3_step(stmt) == SQLITE_ROW {
-                folders.append(Folder(
-                    id: string(stmt, 0),
-                    title: string(stmt, 1),
-                    createdTime: date(stmt, 2),
-                    updatedTime: date(stmt, 3)
-                ))
+                folders.append(folderFromRow(stmt))
             }
         }
         return folders
     }
 
-    func saveFolder(_ folder: Folder) {
+    /// Every trashed notebook, most-recently-deleted first.
+    func fetchTrashedFolders() -> [Folder] {
+        var folders: [Folder] = []
+        withStatement("SELECT id, title, created_time, updated_time, deleted_time FROM folders WHERE deleted_time != 0 ORDER BY deleted_time DESC") { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                folders.append(folderFromRow(stmt))
+            }
+        }
+        return folders
+    }
+
+    private func folderFromRow(_ stmt: OpaquePointer) -> Folder {
+        Folder(
+            id: string(stmt, 0),
+            title: string(stmt, 1),
+            createdTime: date(stmt, 2),
+            updatedTime: date(stmt, 3),
+            deletedTime: optionalDate(stmt, 4)
+        )
+    }
+
+    /// Nil if the folder doesn't exist locally yet. Used by sync to decide whether a
+    /// pulled remote item is newer than what's already stored.
+    func folderUpdatedTime(id: String) -> Int64? {
+        var result: Int64?
+        withStatement("SELECT updated_time FROM folders WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { result = sqlite3_column_int64(stmt, 0) }
+        }
+        return result
+    }
+
+    /// Whether Joplin Cloud already knows about this folder (came from a pull, or was
+    /// pushed successfully at least once). False for a folder that only exists locally
+    /// — used to decide whether deleting it needs a remote delete queued too.
+    func folderSyncedFlag(id: String) -> Bool {
+        var result = false
+        withStatement("SELECT is_synced FROM folders WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { result = int(stmt, 0) != 0 }
+        }
+        return result
+    }
+
+    /// [dirty] = has local changes not yet pushed to Joplin Cloud. [synced] = Joplin
+    /// Cloud already knows about this id. Both are written explicitly on every save
+    /// (rather than defaulted) because INSERT OR REPLACE re-creates the whole row —
+    /// any column left out would silently reset to its table default.
+    func saveFolder(_ folder: Folder, dirty: Bool, synced: Bool) {
         let sql = """
-        INSERT OR REPLACE INTO folders (id, title, created_time, updated_time)
-        VALUES (?, ?, ?, ?)
+        INSERT OR REPLACE INTO folders (id, title, created_time, updated_time, is_dirty, is_synced, deleted_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """
         withStatement(sql) { stmt in
             bind(stmt, 1, folder.id)
             bind(stmt, 2, folder.title)
             bind(stmt, 3, folder.createdTime)
             bind(stmt, 4, folder.updatedTime)
+            sqlite3_bind_int(stmt, 5, dirty ? 1 : 0)
+            sqlite3_bind_int(stmt, 6, synced ? 1 : 0)
+            sqlite3_bind_int64(stmt, 7, folder.deletedTime.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0)
             sqlite3_step(stmt)
         }
+    }
+
+    func markFolderSynced(id: String) {
+        withStatement("UPDATE folders SET is_dirty = 0, is_synced = 1 WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            sqlite3_step(stmt)
+        }
+    }
+
+    func fetchDirtyFolders() -> [Folder] {
+        var folders: [Folder] = []
+        withStatement("SELECT id, title, created_time, updated_time, deleted_time FROM folders WHERE is_dirty = 1") { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                folders.append(folderFromRow(stmt))
+            }
+        }
+        return folders
     }
 
     func deleteFolder(id: String) {
@@ -169,17 +281,17 @@ final class DatabaseManager {
         if folderId != nil {
             sql = """
             SELECT id, parent_id, title, body, created_time, updated_time,
-                   is_todo, todo_completed
+                   is_todo, todo_completed, deleted_time, is_pinned
             FROM notes
-            WHERE parent_id = ? AND is_conflict = 0
+            WHERE parent_id = ? AND is_conflict = 0 AND deleted_time = 0
             ORDER BY updated_time DESC
             """
         } else {
             sql = """
             SELECT id, parent_id, title, body, created_time, updated_time,
-                   is_todo, todo_completed
+                   is_todo, todo_completed, deleted_time, is_pinned
             FROM notes
-            WHERE is_conflict = 0
+            WHERE is_conflict = 0 AND deleted_time = 0
             ORDER BY updated_time DESC
             """
         }
@@ -190,27 +302,77 @@ final class DatabaseManager {
                 bind(stmt, 1, folderId)
             }
             while sqlite3_step(stmt) == SQLITE_ROW {
-                notes.append(Note(
-                    id: string(stmt, 0),
-                    folderId: string(stmt, 1),
-                    title: string(stmt, 2),
-                    body: string(stmt, 3),
-                    createdTime: date(stmt, 4),
-                    updatedTime: date(stmt, 5),
-                    isTodo: int(stmt, 6) != 0,
-                    todoCompleted: int(stmt, 7) != 0
-                ))
+                notes.append(noteFromRow(stmt))
             }
         }
         return notes
     }
 
-    func saveNote(_ note: Note) {
+    /// Every trashed note across all notebooks, most-recently-deleted first.
+    func fetchTrashedNotes() -> [Note] {
+        var notes: [Note] = []
+        withStatement("""
+            SELECT id, parent_id, title, body, created_time, updated_time,
+                   is_todo, todo_completed, deleted_time, is_pinned
+            FROM notes
+            WHERE deleted_time != 0
+            ORDER BY deleted_time DESC
+            """) { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                notes.append(noteFromRow(stmt))
+            }
+        }
+        return notes
+    }
+
+    private func noteFromRow(_ stmt: OpaquePointer) -> Note {
+        Note(
+            id: string(stmt, 0),
+            folderId: string(stmt, 1),
+            title: string(stmt, 2),
+            body: string(stmt, 3),
+            createdTime: date(stmt, 4),
+            updatedTime: date(stmt, 5),
+            isTodo: int(stmt, 6) != 0,
+            todoCompleted: int(stmt, 7) != 0,
+            deletedTime: optionalDate(stmt, 8),
+            isPinned: int(stmt, 9) != 0
+        )
+    }
+
+    /// Nil if the note doesn't exist locally yet. Used by sync to decide whether a
+    /// pulled remote item is newer than what's already stored.
+    func noteUpdatedTime(id: String) -> Int64? {
+        var result: Int64?
+        withStatement("SELECT updated_time FROM notes WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { result = sqlite3_column_int64(stmt, 0) }
+        }
+        return result
+    }
+
+    /// Whether Joplin Cloud already knows about this note (came from a pull, or was
+    /// pushed successfully at least once). False for a note that only exists locally
+    /// — used to decide whether deleting it needs a remote delete queued too.
+    func noteSyncedFlag(id: String) -> Bool {
+        var result = false
+        withStatement("SELECT is_synced FROM notes WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { result = int(stmt, 0) != 0 }
+        }
+        return result
+    }
+
+    /// [dirty] = has local changes not yet pushed to Joplin Cloud. [synced] = Joplin
+    /// Cloud already knows about this id. Both are written explicitly on every save
+    /// (rather than defaulted) because INSERT OR REPLACE re-creates the whole row —
+    /// any column left out would silently reset to its table default.
+    func saveNote(_ note: Note, dirty: Bool, synced: Bool) {
         let sql = """
         INSERT OR REPLACE INTO notes
             (id, parent_id, title, body, created_time, updated_time,
-             is_todo, todo_completed, source_application)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, "com.ikuteam.NotesTN")
+             is_todo, todo_completed, source_application, is_dirty, is_synced, deleted_time, is_pinned)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, "com.ikuteam.NotesTN", ?, ?, ?, ?)
         """
         withStatement(sql) { stmt in
             bind(stmt, 1, note.id)
@@ -221,8 +383,33 @@ final class DatabaseManager {
             bind(stmt, 6, note.updatedTime)
             sqlite3_bind_int(stmt, 7, note.isTodo ? 1 : 0)
             sqlite3_bind_int(stmt, 8, note.todoCompleted ? 1 : 0)
+            sqlite3_bind_int(stmt, 9, dirty ? 1 : 0)
+            sqlite3_bind_int(stmt, 10, synced ? 1 : 0)
+            sqlite3_bind_int64(stmt, 11, note.deletedTime.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0)
+            sqlite3_bind_int(stmt, 12, note.isPinned ? 1 : 0)
             sqlite3_step(stmt)
         }
+    }
+
+    func markNoteSynced(id: String) {
+        withStatement("UPDATE notes SET is_dirty = 0, is_synced = 1 WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            sqlite3_step(stmt)
+        }
+    }
+
+    func fetchDirtyNotes() -> [Note] {
+        var notes: [Note] = []
+        withStatement("""
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
+            FROM notes
+            WHERE is_dirty = 1
+            """) { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                notes.append(noteFromRow(stmt))
+            }
+        }
+        return notes
     }
 
     func deleteNote(id: String) {
@@ -232,12 +419,40 @@ final class DatabaseManager {
         }
     }
 
+    // MARK: - Pending remote deletes
+
+    func queueDelete(id: String, itemType: String) {
+        withStatement("INSERT OR REPLACE INTO pending_deletes (id, item_type) VALUES (?, ?)") { stmt in
+            bind(stmt, 1, id)
+            bind(stmt, 2, itemType)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Pairs of (id, itemType) — itemType is "note" or "folder".
+    func fetchPendingDeletes() -> [(id: String, itemType: String)] {
+        var result: [(id: String, itemType: String)] = []
+        withStatement("SELECT id, item_type FROM pending_deletes") { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                result.append((id: string(stmt, 0), itemType: string(stmt, 1)))
+            }
+        }
+        return result
+    }
+
+    func clearPendingDelete(id: String) {
+        withStatement("DELETE FROM pending_deletes WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            sqlite3_step(stmt)
+        }
+    }
+
     func searchNotes(query: String) -> [Note] {
         let sql = """
         SELECT id, parent_id, title, body, created_time, updated_time,
-               is_todo, todo_completed
+               is_todo, todo_completed, deleted_time, is_pinned
         FROM notes
-        WHERE is_conflict = 0
+        WHERE is_conflict = 0 AND deleted_time = 0
           AND (title LIKE ? OR body LIKE ?)
         ORDER BY updated_time DESC
         LIMIT 200
@@ -249,16 +464,7 @@ final class DatabaseManager {
             bind(stmt, 1, pattern)
             bind(stmt, 2, pattern)
             while sqlite3_step(stmt) == SQLITE_ROW {
-                notes.append(Note(
-                    id: string(stmt, 0),
-                    folderId: string(stmt, 1),
-                    title: string(stmt, 2),
-                    body: string(stmt, 3),
-                    createdTime: date(stmt, 4),
-                    updatedTime: date(stmt, 5),
-                    isTodo: int(stmt, 6) != 0,
-                    todoCompleted: int(stmt, 7) != 0
-                ))
+                notes.append(noteFromRow(stmt))
             }
         }
         return notes
@@ -266,11 +472,49 @@ final class DatabaseManager {
 
     // MARK: - Resources
 
-    func saveResource(_ resource: Resource) {
+    /// Local file:// URL for an already-synced resource, or nil if it hasn't been
+    /// downloaded yet. Used to rewrite Joplin's `:/resourceId` links into something the
+    /// editor's WKWebView can actually load (it already has read access to
+    /// resourcesDirectory via loadFileURL's allowingReadAccessTo — see EditorView).
+    func resourceLocalUrl(id: String) -> String? {
+        var filename: String?
+        withStatement("SELECT filename FROM resources WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { filename = string(stmt, 0) }
+        }
+        guard let filename, let dir = resourcesDirectory else { return nil }
+        return dir.appendingPathComponent(filename).absoluteString
+    }
+
+    func resourceExists(id: String) -> Bool {
+        var exists = false
+        withStatement("SELECT 1 FROM resources WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            exists = sqlite3_step(stmt) == SQLITE_ROW
+        }
+        return exists
+    }
+
+    /// Local file:// URL for an already-synced resource — for contexts needing an
+    /// actual file URL (e.g. the note list's thumbnail), unlike [resourceLocalUrl]
+    /// which returns an absoluteString for the editor's WKWebView.
+    func resourceLocalFileURL(id: String) -> URL? {
+        var filename: String?
+        withStatement("SELECT filename FROM resources WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { filename = string(stmt, 0) }
+        }
+        guard let filename, let dir = resourcesDirectory else { return nil }
+        return dir.appendingPathComponent(filename)
+    }
+
+    /// [dirty] = has local bytes not yet pushed to Joplin Cloud. [synced] = Joplin Cloud
+    /// already knows about this id. Same explicit-write rule as saveNote/saveFolder.
+    func saveResource(_ resource: Resource, dirty: Bool, synced: Bool) {
         let sql = """
         INSERT OR REPLACE INTO resources
-            (id, title, mime, filename, file_size, created_time, updated_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, title, mime, filename, file_size, created_time, updated_time, is_dirty, is_synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         let now = Date()
         withStatement(sql) { stmt in
@@ -281,6 +525,8 @@ final class DatabaseManager {
             sqlite3_bind_int64(stmt, 5, Int64(resource.fileSize))
             bind(stmt, 6, now)
             bind(stmt, 7, now)
+            sqlite3_bind_int(stmt, 8, dirty ? 1 : 0)
+            sqlite3_bind_int(stmt, 9, synced ? 1 : 0)
             sqlite3_step(stmt)
         }
         // Link resource to note
@@ -289,6 +535,58 @@ final class DatabaseManager {
             bind(stmt, 2, resource.id)
             sqlite3_step(stmt)
         }
+    }
+
+    func resourceSyncedFlag(id: String) -> Bool {
+        var result = false
+        withStatement("SELECT is_synced FROM resources WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { result = int(stmt, 0) != 0 }
+        }
+        return result
+    }
+
+    func markResourceSynced(id: String) {
+        withStatement("UPDATE resources SET is_dirty = 0, is_synced = 1 WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            sqlite3_step(stmt)
+        }
+    }
+
+    func fetchDirtyResources() -> [Resource] {
+        var resources: [Resource] = []
+        withStatement("SELECT id, title, mime, filename, file_size FROM resources WHERE is_dirty = 1") { stmt in
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                resources.append(Resource(
+                    id: string(stmt, 0),
+                    title: string(stmt, 1),
+                    mimeType: string(stmt, 2),
+                    filename: string(stmt, 3),
+                    fileSize: Int(sqlite3_column_int64(stmt, 4)),
+                    noteId: ""
+                ))
+            }
+        }
+        return resources
+    }
+
+    /// Removes just the note<->resource link, without touching the resource row itself
+    /// — used when an image is removed from a note's body but the note stays alive.
+    func unlinkNoteResource(noteId: String, resourceId: String) {
+        withStatement("DELETE FROM note_resources WHERE note_id = ? AND resource_id = ?") { stmt in
+            bind(stmt, 1, noteId)
+            bind(stmt, 2, resourceId)
+            sqlite3_step(stmt)
+        }
+    }
+
+    func isResourceReferenced(id: String) -> Bool {
+        var exists = false
+        withStatement("SELECT 1 FROM note_resources WHERE resource_id = ? LIMIT 1") { stmt in
+            bind(stmt, 1, id)
+            exists = sqlite3_step(stmt) == SQLITE_ROW
+        }
+        return exists
     }
 
     func deleteResource(id: String) {
@@ -345,6 +643,13 @@ final class DatabaseManager {
         // Joplin stores timestamps as milliseconds since epoch
         let ms = sqlite3_column_int64(stmt, col)
         return Date(timeIntervalSince1970: Double(ms) / 1000.0)
+    }
+
+    /// Same as date(_:_:), but 0 (the "not trashed" sentinel) maps to nil instead of
+    /// the 1970 epoch — used for deleted_time only.
+    private func optionalDate(_ stmt: OpaquePointer, _ col: Int32) -> Date? {
+        let ms = sqlite3_column_int64(stmt, col)
+        return ms == 0 ? nil : Date(timeIntervalSince1970: Double(ms) / 1000.0)
     }
 
     // Typed binders

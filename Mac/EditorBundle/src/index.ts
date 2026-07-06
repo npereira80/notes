@@ -8,7 +8,7 @@
  *   Native → JS:  window.NativeEditor.setContent(html) / execCommand(cmd, value) etc.
  */
 
-import { EditorState, Plugin, Transaction } from 'prosemirror-state';
+import { EditorState, Plugin, Selection, Transaction } from 'prosemirror-state';
 import { EditorView, DirectEditorProps, Decoration, DecorationSet } from 'prosemirror-view';
 import { DOMParser as PMDOMParser, DOMSerializer, Fragment } from 'prosemirror-model';
 import { history } from 'prosemirror-history';
@@ -43,6 +43,7 @@ interface SelectionState {
 
 interface NativeMessage {
   type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl';
+  title?: string;
   html?: string;
   selectionState?: SelectionState;
   message?: string;
@@ -125,6 +126,30 @@ function isUrl(text: string): boolean {
 
 // ── Build editor keymap ────────────────────────────────────────────────────────
 
+// Enter inside the title moves the cursor into the body instead of splitting
+// the title node (there's nowhere else for a "second title" to go).
+const moveFromTitleToBody = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+  const { $from } = state.selection;
+  if ($from.parent.type !== schema.nodes.title) return false;
+  if (dispatch) {
+    const afterTitle = state.doc.firstChild!.nodeSize;
+    const sel = Selection.near(state.doc.resolve(afterTitle), 1);
+    dispatch(state.tr.setSelection(sel).scrollIntoView());
+  }
+  return true;
+};
+
+// Backspace at the very start of the first body block would otherwise try to
+// join/lift into the title node above (different schema, no marks) — swallow
+// it instead of letting that merge happen.
+const guardBackspaceIntoTitle = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+  const { $from, empty } = state.selection;
+  if (!empty) return false;
+  const afterTitle = state.doc.firstChild!.nodeSize;
+  if ($from.pos === afterTitle + 1 && $from.parentOffset === 0) return true;
+  return false;
+};
+
 function buildKeymap() {
   const { list_item, task_list_item } = schema.nodes;
   const listItemTypes = [list_item, task_list_item];
@@ -141,8 +166,9 @@ function buildKeymap() {
     'Tab': (state, dispatch, view) => commands.indent(view!),
     'Shift-Tab': (state, dispatch, view) => commands.outdent(view!),
 
-    // Enter in list items
+    // Enter in list items (title-to-body handoff checked first)
     'Enter': chainCommands(
+      moveFromTitleToBody,
       splitListItem(task_list_item),
       splitListItem(list_item),
       newlineInCode,
@@ -152,6 +178,7 @@ function buildKeymap() {
     // Lift out with Backspace — only when cursor is at the very start of an empty list item.
     // Without the parentOffset guard, liftListItem fires mid-word and removes list formatting.
     'Backspace': chainCommands(
+      guardBackspaceIntoTitle,
       (state, dispatch) => {
         if (state.selection.$from.parentOffset > 0) return false;
         return liftListItem(task_list_item)(state, dispatch);
@@ -229,11 +256,15 @@ function getSelectionState(state: EditorState): SelectionState {
 
 const serializer = DOMSerializer.fromSchema(schema);
 
-function stateToHTML(state: EditorState): string {
-  const fragment = serializer.serializeFragment(state.doc.content);
+/** Splits the doc's mandatory first (title) node from the rest (body) — the
+ * doc-level HTML the native side ever needs to know about, in the shape it
+ * already stores Note.title/Note.body separately. */
+function stateToParts(state: EditorState): { title: string; body: string } {
+  const titleNode = state.doc.firstChild!;
+  const bodyFragment = state.doc.content.cut(titleNode.nodeSize);
   const div = document.createElement('div');
-  div.appendChild(fragment);
-  return div.innerHTML;
+  div.appendChild(serializer.serializeFragment(bodyFragment));
+  return { title: titleNode.textContent, body: div.innerHTML };
 }
 
 // ── Editor setup ──────────────────────────────────────────────────────────────
@@ -242,14 +273,29 @@ function createEditor(): EditorView {
   const domEl = document.getElementById('editor');
   if (!domEl) throw new Error('#editor element not found');
 
+  // Set by native for a trashed note opened in Trash — matches the ?theme= query
+  // param pattern below. Read once at load time; a trashed note is always reopened
+  // as a fresh WebView load (never toggled live), so this doesn't need to be reactive.
+  const isReadOnly = /[?&]readonly=1(&|$)/.test(location.search);
+
+  // Android only — the on-screen keyboard's floating formatting toolbar sits
+  // right above the keyboard, close enough to the last line that the text
+  // selection handles are hard to grab. Extra bottom padding gives room to
+  // scroll the last line clear of both. See EditorWebView.kt's ?platform=
+  // query param and the body.pm-android rule in build.mjs.
+  const isAndroid = /[?&]platform=android(&|$)/.test(location.search);
+  if (isAndroid) document.body.classList.add('pm-android');
+
+  let lastTitle = '';
   let lastHTML = '';
   let selectionDebounce: ReturnType<typeof setTimeout> | null = null;
 
   const notifyContent = (state: EditorState) => {
-    const html = stateToHTML(state);
-    if (html !== lastHTML) {
-      lastHTML = html;
-      postToNative({ type: 'contentChanged', html });
+    const { title, body } = stateToParts(state);
+    if (title !== lastTitle || body !== lastHTML) {
+      lastTitle = title;
+      lastHTML = body;
+      postToNative({ type: 'contentChanged', title, html: body });
     }
   };
 
@@ -319,6 +365,21 @@ function createEditor(): EditorView {
         },
       }),
 
+      // Placeholder text ("Title") shown when the title node is empty.
+      new Plugin({
+        props: {
+          decorations(state) {
+            const titleNode = state.doc.firstChild;
+            if (titleNode && titleNode.type === schema.nodes.title && titleNode.content.size === 0) {
+              return DecorationSet.create(state.doc, [
+                Decoration.node(0, titleNode.nodeSize, { class: 'pm-title-empty' }),
+              ]);
+            }
+            return DecorationSet.empty;
+          },
+        },
+      }),
+
       // Collapse/expand sections under headings
       new Plugin({
         props: {
@@ -331,7 +392,10 @@ function createEditor(): EditorView {
             const decos: Decoration[] = [];
             for (let i = 0; i < topLevel.length; i++) {
               const { node, offset } = topLevel[i];
-              if (node.type !== schema.nodes.heading || !node.attrs.collapsed) continue;
+              // Level 1 ("Title") has no arrow/collapse UI — see schema.ts's heading
+              // toDOM — so guard against stale collapsed=true data too (e.g. a
+              // heading collapsed at level 3, then restyled to Title).
+              if (node.type !== schema.nodes.heading || node.attrs.level === 1 || !node.attrs.collapsed) continue;
               const level = node.attrs.level as number;
               for (let j = i + 1; j < topLevel.length; j++) {
                 const next = topLevel[j];
@@ -341,12 +405,31 @@ function createEditor(): EditorView {
                 }));
               }
             }
+
+            // The arrow is hidden by default (see build.mjs) and only shown on the
+            // heading (level 3/4, not "Title") the cursor is currently in, collapsed
+            // or not — this marks that heading with a class the CSS keys off.
+            const { $from } = state.selection;
+            for (let d = $from.depth; d >= 0; d--) {
+              const node = $from.node(d);
+              if (node.type === schema.nodes.heading && node.attrs.level !== 1) {
+                const pos = $from.before(d);
+                decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'pm-heading-focused' }));
+                break;
+              }
+            }
+
             return DecorationSet.create(state.doc, decos);
           },
 
-          // Toggle collapsed state when the arrow span is clicked.
+          // Toggle collapsed state when the arrow span is tapped/clicked.
+          // pointerdown (not mousedown) — mousedown on a contenteditable="false"
+          // island inside a contenteditable region relies on the browser
+          // synthesizing a mouse event from a touch, which Chromium/Android
+          // WebView doesn't always do reliably (unlike WebKit/Mac). pointerdown
+          // is fired natively for both touch and mouse on both engines.
           handleDOMEvents: {
-            mousedown(view, event) {
+            pointerdown(view, event) {
               const target = event.target as HTMLElement;
               if (!target.classList.contains('pm-heading-arrow')) return false;
 
@@ -381,8 +464,9 @@ function createEditor(): EditorView {
       // Handle arrow clicks in toggle/details blocks
       new Plugin({
         props: {
+          // pointerdown — see the heading-arrow handler above for why.
           handleDOMEvents: {
-            mousedown(view, event) {
+            pointerdown(view, event) {
               const target = event.target as HTMLElement;
               if (!target.classList.contains('pm-toggle-arrow')) return false;
 
@@ -421,8 +505,9 @@ function createEditor(): EditorView {
       // Handle checkbox clicks in task list items
       new Plugin({
         props: {
+          // pointerdown — see the heading-arrow handler above for why.
           handleDOMEvents: {
-            mousedown(view, event) {
+            pointerdown(view, event) {
               const target = event.target as HTMLElement;
               if (target.tagName === 'INPUT' && target.getAttribute('type') === 'checkbox') {
                 event.preventDefault();
@@ -448,14 +533,15 @@ function createEditor(): EditorView {
                 if (file) {
                   const reader = new FileReader();
                   reader.onload = (e) => {
-                    const src = e.target?.result as string;
-                    if (src) {
-                      // Insert as data URI; Swift will replace with resource later
-                      commands.image(view, { src });
-                    }
+                    const dataUri = e.target?.result as string;
+                    // Hand the raw data URI to native code instead of inserting it
+                    // inline — only native has filesystem access to save it as a real
+                    // Resource (with an id, a local file, and a row in the resources
+                    // table) the way the toolbar's image picker already does. Native
+                    // calls back into insertImage() once that's done.
+                    if (dataUri) postToNative({ type: 'imageRequested', html: dataUri });
                   };
                   reader.readAsDataURL(file);
-                  // Image is already inserted as a data URI — no need to open the file picker.
                 }
                 return true;
               }
@@ -470,6 +556,7 @@ function createEditor(): EditorView {
   const view = new EditorView(domEl, {
     state,
     dispatchTransaction: (tr) => dispatchWithNotify(view)(tr),
+    editable: () => !isReadOnly,
   });
 
   // Initial selection state
@@ -481,11 +568,12 @@ function createEditor(): EditorView {
 // ── Native API (called from Swift via evaluateJavaScript) ─────────────────────
 
 interface NativeEditorBridge {
-  setContent: (html: string) => void;
+  setContent: (title: string, body: string) => void;
   execCommand: (command: string, value?: any) => void;
   focus: () => void;
   blur: () => void;
   getHTML: () => string;
+  collapseSelection: () => void;
 }
 
 declare global {
@@ -514,13 +602,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const bridge: NativeEditorBridge = {
-    setContent(html: string) {
+    setContent(title: string, body: string) {
+      // Build the title node directly from the raw string (a plain text node,
+      // no HTML involved) rather than splicing it into an HTML string — sidesteps
+      // any HTML-escaping concerns for title text like "&" or "<".
+      const titleNode = schema.nodes.title.create(null, title ? schema.text(title) : undefined);
+
+      // parseSlice (not parse) — it doesn't require its result to independently
+      // satisfy doc's own content expression, so the body's blocks can be
+      // extracted as a plain Fragment and combined with titleNode below.
       const parser = PMDOMParser.fromSchema(schema);
       const domParser = new DOMParser();
-      const doc = domParser.parseFromString(html || '<p></p>', 'text/html');
-      const parsed = parser.parse(doc.body, { preserveWhitespace: true });
+      const dom = domParser.parseFromString(body || '<p></p>', 'text/html');
+      const bodySlice = parser.parseSlice(dom.body, { preserveWhitespace: true });
+
+      const content = bodySlice.content.addToStart(titleNode);
       const newState = EditorState.create({
-        doc: parsed,
+        doc: schema.nodes.doc.create(null, content),
         plugins: view.state.plugins,
       });
       view.updateState(newState);
@@ -553,7 +651,21 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     getHTML() {
-      return stateToHTML(view.state);
+      // Body only — matches what native code actually treats as Note.body;
+      // the title lives in Note.title, not in this string.
+      return stateToParts(view.state).body;
+    },
+
+    // Collapses the current selection to a caret at its head, staying in the
+    // same block. Used by Android before opening the "Text Style" dropdown:
+    // a real range selection triggers Android's native floating Cut/Copy/Paste
+    // toolbar, which renders on top of that dropdown. The block-level commands
+    // offered there (heading/paragraph/list/etc.) only need the caret inside
+    // the target block, not a preserved range, so collapsing first is safe and
+    // makes Android dismiss its native toolbar on its own.
+    collapseSelection() {
+      const { state, dispatch } = view;
+      dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(state.selection.head))));
     },
   };
 

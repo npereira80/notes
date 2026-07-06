@@ -24,6 +24,7 @@ data class EditorSelectionState(
 @Serializable
 data class EditorBridgeMessage(
     val type: String,
+    val title: String? = null,
     val html: String? = null,
     val selectionState: EditorSelectionState? = null,
     val message: String? = null,

@@ -74,7 +74,9 @@ function writeEditorHtml(outDir) {
     --color-selection: rgba(0, 120, 255, 0.2);
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-blockquote: #999;
-    --color-highlight: #fef08a;
+    /* Same brand yellow as the note-list selection / caret, not mode-dependent —
+       matches caret-color below. */
+    --color-highlight: #FFD60A;
     --color-link: #c9901a;
   }
 
@@ -86,7 +88,6 @@ function writeEditorHtml(outDir) {
       --color-selection: rgba(80, 160, 255, 0.3);
       --color-code-bg: rgba(255, 255, 255, 0.08);
       --color-blockquote: #777;
-      --color-highlight: #854d0e;
       --color-link: #fbbf24;
     }
   }
@@ -105,8 +106,8 @@ function writeEditorHtml(outDir) {
     --color-selection: rgba(80, 160, 255, 0.3);
     --color-code-bg: rgba(255, 255, 255, 0.08);
     --color-blockquote: #777;
-    --color-highlight: #854d0e;
     --color-link: #fbbf24;
+    --color-hr: rgba(255, 255, 255, 0.3);
   }
   :root[data-theme="light"] {
     --color-text: #000;
@@ -115,22 +116,45 @@ function writeEditorHtml(outDir) {
     --color-selection: rgba(0, 120, 255, 0.2);
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-blockquote: #999;
-    --color-highlight: #fef08a;
     --color-link: #c9901a;
+    --color-hr: rgba(0, 0, 0, 0.2);
   }
 
-  html, body {
+  html {
     height: 100%;
-    background: var(--color-bg);
-    color: var(--color-text);
   }
 
   body {
-    padding: 0 24px 48px;
+    /* min-height (not height) — height:100% pins the box's own bottom edge
+       (and thus its bottom padding) at the viewport boundary, so on a long
+       note whose content overflows that boundary, the padding-bottom below
+       renders invisibly underneath the overflowing text instead of after it.
+       min-height still fills the background for short notes but lets the
+       box grow with content for long ones, so the padding actually lands
+       after the real last line. */
+    min-height: 100%;
+    background: var(--color-bg);
+    color: var(--color-text);
+    /* Left inset is 6px more than right so the heading chevron (which hangs
+       into this gutter at left: -22px) sits farther from the screen edge,
+       without shifting the arrow's offset relative to the heading text. */
+    padding: 0 24px 48px 30px;
     font-family: var(--font-body);
-    font-size: 17px;
-    line-height: 1.3;
+    font-size: 16px;
+    line-height: 1.7;
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Android only (see index.ts's ?platform=android detection) — 64px more than
+     the default 48px, so the last line of a long note can scroll clear of the
+     floating formatting toolbar/keyboard, making its selection handles easier
+     to grab. */
+  body.pm-android {
+    padding-bottom: 112px;
+    /* Android's TopAppBar sits directly above the WebView with no gap of its
+       own, leaving the title right up against it — 10px (~10dp, this WebView
+       uses width=device-width so CSS px map 1:1 to dp) of breathing room. */
+    padding-top: 10px;
   }
 
   /* ProseMirror container */
@@ -149,11 +173,34 @@ function writeEditorHtml(outDir) {
 
   .ProseMirror > * + * { margin-top: 0.75em; }
 
-  /* Headings */
-  .ProseMirror h1 { font-size: 1.8em; font-weight: 700; line-height: 1.2; }
+  /* Title — the doc's mandatory first node, scrolls with the body since it's
+     part of the same ProseMirror document instead of a separate native field. */
+  .ProseMirror .pm-title {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.25;
+    /* .pm-title is the doc's mandatory first node, so .ProseMirror > * + * (above)
+       never applies to it — margin-top has to be set here explicitly to get any
+       space above it at all. */
+    margin-top: 0.75em;
+    /* Same rhythm as the space between any two paragraphs (.ProseMirror > * + *
+       above) — explicit here (rather than relying only on the next node's
+       margin-top) so the gap after the title is guaranteed regardless of what
+       kind of node follows it. */
+    margin-bottom: 0.75em;
+  }
+  .ProseMirror .pm-title.pm-title-empty::before {
+    content: 'Title';
+    color: var(--color-secondary);
+    pointer-events: none;
+  }
+
+  /* Headings — h1 doubles as the "Title" style choice in the toolbar menu, so it
+     matches .pm-title's look exactly (24px/700) instead of its old 1.8em size. */
+  .ProseMirror h1 { font-size: 24px; font-weight: 700; line-height: 1.25; }
   .ProseMirror h2 { font-size: 1.5em; font-weight: 600; line-height: 1.25; }
-  .ProseMirror h3 { font-size: 1.25em; font-weight: 600; }
-  .ProseMirror h4 { font-size: 1.1em; font-weight: 600; }
+  .ProseMirror h3 { font-size: 1.25em; font-weight: 700; }
+  .ProseMirror h4 { font-size: 1.1em; font-weight: 700; }
   .ProseMirror h5 { font-size: 1em; font-weight: 600; }
   .ProseMirror h6 { font-size: 0.9em; font-weight: 600; color: var(--color-secondary); }
 
@@ -224,7 +271,9 @@ function writeEditorHtml(outDir) {
   /* Images */
   .ProseMirror img {
     max-width: 100%;
-    border-radius: 4px;
+    /* Matches the note list's own card/thumbnail corner radius (see
+       NoteListScreen.kt's RoundedCornerShape(14.dp) usages). */
+    border-radius: 14px;
     display: block;
   }
   .ProseMirror img.ProseMirror-selectednode {
@@ -234,7 +283,7 @@ function writeEditorHtml(outDir) {
   /* Horizontal rule */
   .ProseMirror hr {
     border: none;
-    border-top: 1px solid var(--color-code-bg);
+    border-top: 1px solid var(--color-hr);
     margin: 1.5em 0;
   }
 
@@ -255,14 +304,33 @@ function writeEditorHtml(outDir) {
   /* Heading collapse arrows */
   .ProseMirror h1, .ProseMirror h2, .ProseMirror h3,
   .ProseMirror h4, .ProseMirror h5, .ProseMirror h6 {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    position: relative;
+    /* Use rem (fixed to the base 16px) instead of the generic 0.75em rule below,
+       which is relative to each heading's own (larger) font-size and so gave
+       bigger headings disproportionately more space before them. This matches
+       the 0.5em/8px gap paragraphs already use between each other. */
+    margin-top: 0.5rem;
   }
-  .ProseMirror .pm-heading-content { flex: 1; }
+  /* Space after a heading, before whatever follows it — same 8px gap as above,
+     so a heading's trailing space matches a paragraph's trailing space instead
+     of falling back to the generic 0.75em rule (which, computed off a plain
+     paragraph's own font-size, worked out larger and felt inconsistent). */
+  .ProseMirror h1 + *, .ProseMirror h2 + *, .ProseMirror h3 + *,
+  .ProseMirror h4 + *, .ProseMirror h5 + *, .ProseMirror h6 + * {
+    margin-top: 0.5rem;
+  }
+  /* The arrow is pulled out of flow into the body's left padding (see the
+     body rule's "padding: 0 24px 48px") so the heading text lines up with
+     paragraph text instead of being pushed right by an inline arrow. */
   .ProseMirror .pm-heading-arrow {
-    flex-shrink: 0;
-    width: 18px;
+    position: absolute;
+    left: -22px;
+    top: 50%;
+    /* Widened from 18px so the arrow's right edge reaches the heading/body
+       text's left edge (0), closing the 4px gap that used to sit between them —
+       left stays at -22px (chevron position unchanged) and the text's own
+       position is untouched. */
+    width: 22px;
     height: 18px;
     display: flex;
     align-items: center;
@@ -272,20 +340,25 @@ function writeEditorHtml(outDir) {
     color: var(--color-secondary);
     font-size: 1em;
     font-weight: normal;
-    opacity: 1;
-    transform: rotate(90deg); /* expanded: chevron points down */
+    /* Hidden unless the cursor is in this heading (see the pm-heading-focused
+       decoration in index.ts) — collapsed or not. */
+    opacity: 0;
+    transform: translateY(-50%) rotate(90deg); /* expanded: chevron points down */
     transition: transform 0.15s ease;
     user-select: none;
   }
+  .ProseMirror .pm-heading-focused .pm-heading-arrow {
+    opacity: 1;
+  }
   .ProseMirror .pm-heading-arrow::after { content: '›'; }
   .ProseMirror .pm-heading-arrow:hover { background: var(--color-code-bg); }
-  /* Collapsed: chevron points right */
-  .ProseMirror h1[data-collapsed] .pm-heading-arrow,
+  /* Collapsed: chevron points right (h1/"Title" has no arrow at all — see
+     schema.ts's heading toDOM) */
   .ProseMirror h2[data-collapsed] .pm-heading-arrow,
   .ProseMirror h3[data-collapsed] .pm-heading-arrow,
   .ProseMirror h4[data-collapsed] .pm-heading-arrow,
   .ProseMirror h5[data-collapsed] .pm-heading-arrow,
-  .ProseMirror h6[data-collapsed] .pm-heading-arrow { transform: rotate(0deg); }
+  .ProseMirror h6[data-collapsed] .pm-heading-arrow { transform: translateY(-50%) rotate(0deg); }
   /* Blocks hidden by a collapsed heading */
   .pm-heading-section-hidden { display: none; }
 

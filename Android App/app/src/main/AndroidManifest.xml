@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Needed to talk to Joplin Cloud's sync API (see JoplinCloudApi.kt). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".NotesTNApplication"
         android:allowBackup="true"

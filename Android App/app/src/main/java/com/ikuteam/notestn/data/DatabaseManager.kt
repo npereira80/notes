@@ -23,7 +23,7 @@ class DatabaseManager private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "notes.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 5
 
         @Volatile
         private var instance: DatabaseManager? = null
@@ -51,7 +51,10 @@ class DatabaseManager private constructor(context: Context) :
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT '',
                 created_time INTEGER NOT NULL,
-                updated_time INTEGER NOT NULL
+                updated_time INTEGER NOT NULL,
+                is_dirty INTEGER NOT NULL DEFAULT 0,
+                is_synced INTEGER NOT NULL DEFAULT 0,
+                deleted_time INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -72,7 +75,11 @@ class DatabaseManager private constructor(context: Context) :
                 todo_due INTEGER NOT NULL DEFAULT 0,
                 todo_completed INTEGER NOT NULL DEFAULT 0,
                 source TEXT NOT NULL DEFAULT '',
-                source_application TEXT NOT NULL DEFAULT 'com.ikuteam.notestn'
+                source_application TEXT NOT NULL DEFAULT 'com.ikuteam.notestn',
+                is_dirty INTEGER NOT NULL DEFAULT 0,
+                is_synced INTEGER NOT NULL DEFAULT 0,
+                deleted_time INTEGER NOT NULL DEFAULT 0,
+                is_pinned INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -89,7 +96,9 @@ class DatabaseManager private constructor(context: Context) :
                 filename TEXT NOT NULL DEFAULT '',
                 file_size INTEGER NOT NULL DEFAULT 0,
                 created_time INTEGER NOT NULL,
-                updated_time INTEGER NOT NULL
+                updated_time INTEGER NOT NULL,
+                is_dirty INTEGER NOT NULL DEFAULT 0,
+                is_synced INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -104,10 +113,53 @@ class DatabaseManager private constructor(context: Context) :
             )
             """.trimIndent()
         )
+
+        createPendingDeletesTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // No migrations yet — schema hasn't changed since v1.
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE folders ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE folders ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE notes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE notes ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0")
+            createPendingDeletesTable(db)
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE resources ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE resources ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0")
+            // Existing rows predate this column and could be either pulled-from-server
+            // or locally-inserted-but-never-pushed — we can't tell which after the fact.
+            // Default to "already synced" (safer: guarantees a later removal queues a
+            // remote delete) rather than "dirty" (which would just re-push identical
+            // bytes the server likely already has for most rows).
+            db.execSQL("UPDATE resources SET is_synced = 1")
+        }
+        if (oldVersion < 4) {
+            // 0 = not trashed (matches Joplin's own deleted_time convention) — mapped
+            // to/from Note.deletedTime / Folder.deletedTime's Long? at the app layer.
+            db.execSQL("ALTER TABLE folders ADD COLUMN deleted_time INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE notes ADD COLUMN deleted_time INTEGER NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 5) {
+            // Not a native Joplin column — mirrors the pinned flag we stash in each
+            // note's application_data on the server (see JoplinItemSerializer/Parser).
+            db.execSQL("ALTER TABLE notes ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    private fun createPendingDeletesTable(db: SQLiteDatabase) {
+        // Remote deletions queued for the next push — populated when a note/folder that
+        // was already known to Joplin Cloud (is_synced = 1) gets deleted locally, since
+        // deleting the row also destroys the id we'd need to tell the server about it.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS pending_deletes (
+                id TEXT PRIMARY KEY,
+                item_type TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -125,31 +177,85 @@ class DatabaseManager private constructor(context: Context) :
     fun fetchFolders(): List<Folder> {
         val folders = mutableListOf<Folder>()
         readableDatabase.rawQuery(
-            "SELECT id, title, created_time, updated_time FROM folders ORDER BY title ASC",
+            "SELECT id, title, created_time, updated_time, deleted_time FROM folders WHERE deleted_time = 0 ORDER BY title ASC",
             null
         ).use { c ->
-            while (c.moveToNext()) {
-                folders.add(
-                    Folder(
-                        id = c.getString(0),
-                        title = c.getString(1),
-                        createdTime = c.getLong(2),
-                        updatedTime = c.getLong(3),
-                    )
-                )
-            }
+            while (c.moveToNext()) folders.add(c.toFolder())
         }
         return folders
     }
 
-    fun saveFolder(folder: Folder) {
+    /** Every trashed notebook, most-recently-deleted first. */
+    fun fetchTrashedFolders(): List<Folder> {
+        val folders = mutableListOf<Folder>()
+        readableDatabase.rawQuery(
+            "SELECT id, title, created_time, updated_time, deleted_time FROM folders WHERE deleted_time != 0 ORDER BY deleted_time DESC",
+            null
+        ).use { c ->
+            while (c.moveToNext()) folders.add(c.toFolder())
+        }
+        return folders
+    }
+
+    private fun Cursor.toFolder() = Folder(
+        id = getString(0),
+        title = getString(1),
+        createdTime = getLong(2),
+        updatedTime = getLong(3),
+        deletedTime = getLong(4).takeIf { it != 0L },
+    )
+
+    /** Null if the folder doesn't exist locally yet. Used by sync to decide whether a
+     * pulled remote item is newer than what's already stored. */
+    fun folderUpdatedTime(id: String): Long? {
+        readableDatabase.rawQuery("SELECT updated_time FROM folders WHERE id = ?", arrayOf(id)).use { c ->
+            return if (c.moveToFirst()) c.getLong(0) else null
+        }
+    }
+
+    /** Whether Joplin Cloud already knows about this folder (came from a pull, or was
+     * pushed successfully at least once). False for a folder that only exists locally
+     * — used to decide whether deleting it needs a remote delete queued too. */
+    fun folderSyncedFlag(id: String): Boolean {
+        readableDatabase.rawQuery("SELECT is_synced FROM folders WHERE id = ?", arrayOf(id)).use { c ->
+            return c.moveToFirst() && c.getInt(0) != 0
+        }
+    }
+
+    /** [dirty] = has local changes not yet pushed to Joplin Cloud. [synced] = Joplin
+     * Cloud already knows about this id. Both are written explicitly on every save
+     * (rather than defaulted) because INSERT OR REPLACE re-creates the whole row —
+     * any column left out of [values] would silently reset to its table default. */
+    fun saveFolder(folder: Folder, dirty: Boolean, synced: Boolean) {
         val values = ContentValues().apply {
             put("id", folder.id)
             put("title", folder.title)
             put("created_time", folder.createdTime)
             put("updated_time", folder.updatedTime)
+            put("is_dirty", if (dirty) 1 else 0)
+            put("is_synced", if (synced) 1 else 0)
+            put("deleted_time", folder.deletedTime ?: 0L)
         }
         writableDatabase.insertWithOnConflict("folders", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun markFolderSynced(id: String) {
+        val values = ContentValues().apply {
+            put("is_dirty", 0)
+            put("is_synced", 1)
+        }
+        writableDatabase.update("folders", values, "id = ?", arrayOf(id))
+    }
+
+    fun fetchDirtyFolders(): List<Folder> {
+        val folders = mutableListOf<Folder>()
+        readableDatabase.rawQuery(
+            "SELECT id, title, created_time, updated_time, deleted_time FROM folders WHERE is_dirty = 1",
+            null
+        ).use { c ->
+            while (c.moveToNext()) folders.add(c.toFolder())
+        }
+        return folders
     }
 
     fun deleteFolder(id: String) {
@@ -164,16 +270,16 @@ class DatabaseManager private constructor(context: Context) :
         val notes = mutableListOf<Note>()
         val sql = if (folderId != null) {
             """
-            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
             FROM notes
-            WHERE parent_id = ? AND is_conflict = 0
+            WHERE parent_id = ? AND is_conflict = 0 AND deleted_time = 0
             ORDER BY updated_time DESC
             """.trimIndent()
         } else {
             """
-            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
             FROM notes
-            WHERE is_conflict = 0
+            WHERE is_conflict = 0 AND deleted_time = 0
             ORDER BY updated_time DESC
             """.trimIndent()
         }
@@ -184,7 +290,45 @@ class DatabaseManager private constructor(context: Context) :
         return notes
     }
 
-    fun saveNote(note: Note) {
+    /** Every trashed note across all notebooks, most-recently-deleted first. */
+    fun fetchTrashedNotes(): List<Note> {
+        val notes = mutableListOf<Note>()
+        readableDatabase.rawQuery(
+            """
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
+            FROM notes
+            WHERE deleted_time != 0
+            ORDER BY deleted_time DESC
+            """.trimIndent(),
+            null
+        ).use { c ->
+            while (c.moveToNext()) notes.add(c.toNote())
+        }
+        return notes
+    }
+
+    /** Null if the note doesn't exist locally yet. Used by sync to decide whether a
+     * pulled remote item is newer than what's already stored. */
+    fun noteUpdatedTime(id: String): Long? {
+        readableDatabase.rawQuery("SELECT updated_time FROM notes WHERE id = ?", arrayOf(id)).use { c ->
+            return if (c.moveToFirst()) c.getLong(0) else null
+        }
+    }
+
+    /** Whether Joplin Cloud already knows about this note (came from a pull, or was
+     * pushed successfully at least once). False for a note that only exists locally
+     * — used to decide whether deleting it needs a remote delete queued too. */
+    fun noteSyncedFlag(id: String): Boolean {
+        readableDatabase.rawQuery("SELECT is_synced FROM notes WHERE id = ?", arrayOf(id)).use { c ->
+            return c.moveToFirst() && c.getInt(0) != 0
+        }
+    }
+
+    /** [dirty] = has local changes not yet pushed to Joplin Cloud. [synced] = Joplin
+     * Cloud already knows about this id. Both are written explicitly on every save
+     * (rather than defaulted) because INSERT OR REPLACE re-creates the whole row —
+     * any column left out of [values] would silently reset to its table default. */
+    fun saveNote(note: Note, dirty: Boolean, synced: Boolean) {
         val values = ContentValues().apply {
             put("id", note.id)
             put("parent_id", note.folderId)
@@ -195,12 +339,62 @@ class DatabaseManager private constructor(context: Context) :
             put("is_todo", if (note.isTodo) 1 else 0)
             put("todo_completed", if (note.todoCompleted) 1 else 0)
             put("source_application", "com.ikuteam.notestn")
+            put("is_dirty", if (dirty) 1 else 0)
+            put("is_synced", if (synced) 1 else 0)
+            put("deleted_time", note.deletedTime ?: 0L)
+            put("is_pinned", if (note.isPinned) 1 else 0)
         }
         writableDatabase.insertWithOnConflict("notes", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    fun markNoteSynced(id: String) {
+        val values = ContentValues().apply {
+            put("is_dirty", 0)
+            put("is_synced", 1)
+        }
+        writableDatabase.update("notes", values, "id = ?", arrayOf(id))
+    }
+
+    fun fetchDirtyNotes(): List<Note> {
+        val notes = mutableListOf<Note>()
+        readableDatabase.rawQuery(
+            """
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
+            FROM notes
+            WHERE is_dirty = 1
+            """.trimIndent(),
+            null
+        ).use { c ->
+            while (c.moveToNext()) notes.add(c.toNote())
+        }
+        return notes
+    }
+
     fun deleteNote(id: String) {
         writableDatabase.delete("notes", "id = ?", arrayOf(id))
+    }
+
+    // MARK: - Pending remote deletes
+
+    fun queueDelete(id: String, itemType: String) {
+        val values = ContentValues().apply {
+            put("id", id)
+            put("item_type", itemType)
+        }
+        writableDatabase.insertWithOnConflict("pending_deletes", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Pairs of (id, itemType) — itemType is "note" or "folder". */
+    fun fetchPendingDeletes(): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        readableDatabase.rawQuery("SELECT id, item_type FROM pending_deletes", null).use { c ->
+            while (c.moveToNext()) result.add(c.getString(0) to c.getString(1))
+        }
+        return result
+    }
+
+    fun clearPendingDelete(id: String) {
+        writableDatabase.delete("pending_deletes", "id = ?", arrayOf(id))
     }
 
     fun searchNotes(query: String): List<Note> {
@@ -208,9 +402,9 @@ class DatabaseManager private constructor(context: Context) :
         val pattern = "%$query%"
         readableDatabase.rawQuery(
             """
-            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
             FROM notes
-            WHERE is_conflict = 0
+            WHERE is_conflict = 0 AND deleted_time = 0
               AND (title LIKE ? OR body LIKE ?)
             ORDER BY updated_time DESC
             LIMIT 200
@@ -231,11 +425,42 @@ class DatabaseManager private constructor(context: Context) :
         updatedTime = getLong(5),
         isTodo = getInt(6) != 0,
         todoCompleted = getInt(7) != 0,
+        deletedTime = getLong(8).takeIf { it != 0L },
+        isPinned = getInt(9) != 0,
     )
 
     // MARK: - Resources
 
-    fun saveResource(resource: Resource) {
+    /** Local WebView URL for an already-synced resource, or null if it hasn't been
+     * downloaded yet. Used to rewrite Joplin's `:/resourceId` links into something the
+     * editor's WebView can actually load — see EditorWebView's asset loader mapping. */
+    fun resourceLocalUrl(id: String): String? {
+        readableDatabase.rawQuery("SELECT filename FROM resources WHERE id = ?", arrayOf(id)).use { c ->
+            if (!c.moveToFirst()) return null
+            return "https://appassets.androidplatform.net/resources/${c.getString(0)}"
+        }
+    }
+
+    /** Local file for an already-synced resource, or null if it hasn't been
+     * downloaded yet — for contexts needing an actual file (e.g. loading a note-list
+     * thumbnail with Coil), unlike [resourceLocalUrl] which returns a WebView-only
+     * virtual URL. */
+    fun resourceLocalFile(id: String): File? {
+        readableDatabase.rawQuery("SELECT filename FROM resources WHERE id = ?", arrayOf(id)).use { c ->
+            if (!c.moveToFirst()) return null
+            return File(resourcesDirectory, c.getString(0))
+        }
+    }
+
+    fun resourceExists(id: String): Boolean {
+        readableDatabase.rawQuery("SELECT 1 FROM resources WHERE id = ?", arrayOf(id)).use { c ->
+            return c.moveToFirst()
+        }
+    }
+
+    /** [dirty] = has local bytes not yet pushed to Joplin Cloud. [synced] = Joplin Cloud
+     * already knows about this id. Same explicit-write rule as saveNote/saveFolder. */
+    fun saveResource(resource: Resource, dirty: Boolean, synced: Boolean) {
         val now = System.currentTimeMillis()
         val values = ContentValues().apply {
             put("id", resource.id)
@@ -245,6 +470,8 @@ class DatabaseManager private constructor(context: Context) :
             put("file_size", resource.fileSize)
             put("created_time", now)
             put("updated_time", now)
+            put("is_dirty", if (dirty) 1 else 0)
+            put("is_synced", if (synced) 1 else 0)
         }
         writableDatabase.insertWithOnConflict("resources", null, values, SQLiteDatabase.CONFLICT_REPLACE)
 
@@ -254,6 +481,54 @@ class DatabaseManager private constructor(context: Context) :
             put("resource_id", resource.id)
         }
         writableDatabase.insertWithOnConflict("note_resources", null, link, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    fun resourceSyncedFlag(id: String): Boolean {
+        readableDatabase.rawQuery("SELECT is_synced FROM resources WHERE id = ?", arrayOf(id)).use { c ->
+            return c.moveToFirst() && c.getInt(0) != 0
+        }
+    }
+
+    fun markResourceSynced(id: String) {
+        val values = ContentValues().apply {
+            put("is_dirty", 0)
+            put("is_synced", 1)
+        }
+        writableDatabase.update("resources", values, "id = ?", arrayOf(id))
+    }
+
+    fun fetchDirtyResources(): List<Resource> {
+        val resources = mutableListOf<Resource>()
+        readableDatabase.rawQuery(
+            "SELECT id, title, mime, filename, file_size FROM resources WHERE is_dirty = 1",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                resources.add(
+                    Resource(
+                        id = c.getString(0),
+                        title = c.getString(1),
+                        mimeType = c.getString(2),
+                        filename = c.getString(3),
+                        fileSize = c.getLong(4),
+                        noteId = "",
+                    )
+                )
+            }
+        }
+        return resources
+    }
+
+    /** Removes just the note<->resource link, without touching the resource row itself
+     * — used when an image is removed from a note's body but the note stays alive. */
+    fun unlinkNoteResource(noteId: String, resourceId: String) {
+        writableDatabase.delete("note_resources", "note_id = ? AND resource_id = ?", arrayOf(noteId, resourceId))
+    }
+
+    fun isResourceReferenced(id: String): Boolean {
+        readableDatabase.rawQuery("SELECT 1 FROM note_resources WHERE resource_id = ? LIMIT 1", arrayOf(id)).use { c ->
+            return c.moveToFirst()
+        }
     }
 
     fun deleteResource(id: String) {

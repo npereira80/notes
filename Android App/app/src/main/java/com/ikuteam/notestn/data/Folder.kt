@@ -8,6 +8,7 @@ data class Folder(
     var title: String = "",
     var createdTime: Long = System.currentTimeMillis(),
     var updatedTime: Long = System.currentTimeMillis(),
+    var deletedTime: Long? = null,
 ) {
     companion object {
         fun generateId(): String = UUID.randomUUID().toString().replace("-", "").lowercase()

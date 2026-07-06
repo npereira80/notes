@@ -78,10 +78,23 @@ private func rowDate(_ note: Note) -> String {
 struct NoteListView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var searchFocused: Bool
+    @State private var showEmptyTrashConfirm = false
+
+    private var displayedNotes: [Note] {
+        appState.isTrashSelected ? appState.trashedNotes : appState.notes
+    }
+
+    // Pinning only applies to live notes — pulled out of their date group into their
+    // own section (first, like Apple Notes) so a note doesn't appear twice.
+    private var pinnedNotes: [Note] {
+        guard !appState.isTrashSelected else { return [] }
+        return displayedNotes.filter { $0.isPinned }.sorted { $0.updatedTime > $1.updatedTime }
+    }
 
     // Group and sort notes
     private var grouped: [(group: NoteGroup, notes: [Note])] {
-        let byGroup = Dictionary(grouping: appState.notes, by: { group(for: $0) })
+        let unpinned = appState.isTrashSelected ? displayedNotes : displayedNotes.filter { !$0.isPinned }
+        let byGroup = Dictionary(grouping: unpinned, by: { group(for: $0) })
         return byGroup
             .sorted { a, b in
                 if a.key.order != b.key.order { return a.key.order < b.key.order }
@@ -130,13 +143,13 @@ struct NoteListView: View {
             Divider()
 
             // MARK: Note list
-            if appState.notes.isEmpty {
+            if displayedNotes.isEmpty && !(appState.isTrashSelected && !appState.trashedFolders.isEmpty) {
                 emptyState
             } else if !appState.searchText.isEmpty {
                 // Flat list for search results
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(appState.notes) { note in
+                        ForEach(displayedNotes) { note in
                             noteRow(note)
                         }
                     }
@@ -147,6 +160,28 @@ struct NoteListView: View {
                 // Grouped list
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
+                        if !pinnedNotes.isEmpty {
+                            Text("Pinned")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 14)
+                                .padding(.bottom, 4)
+                            ForEach(pinnedNotes) { note in
+                                noteRow(note)
+                            }
+                        }
+                        if appState.isTrashSelected && !appState.trashedFolders.isEmpty {
+                            Text("Notebooks")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 14)
+                                .padding(.bottom, 4)
+                            ForEach(appState.trashedFolders) { folder in
+                                trashedFolderRow(folder)
+                            }
+                        }
                         ForEach(grouped, id: \.group) { section in
                             // Section header
                             Text(section.group.title)
@@ -168,11 +203,24 @@ struct NoteListView: View {
             }
         }
         .toolbar {
-            // Placeholder keeps the toolbar column divider visible.
-            // Replace with real items as features are added.
             ToolbarItem(placement: .primaryAction) {
-                Color.clear.frame(width: 1, height: 22)
+                if appState.isTrashSelected && (!appState.trashedNotes.isEmpty || !appState.trashedFolders.isEmpty) {
+                    Button("Empty Trash", role: .destructive) { showEmptyTrashConfirm = true }
+                } else {
+                    // Placeholder keeps the toolbar column divider visible.
+                    Color.clear.frame(width: 1, height: 22)
+                }
             }
+        }
+        .confirmationDialog(
+            "Permanently delete everything in Trash?",
+            isPresented: $showEmptyTrashConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Empty Trash", role: .destructive) { appState.emptyTrash() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
         }
         .navigationTitle(navigationTitle)
         .onChange(of: appState.isFocusingSearch) { _, focused in
@@ -186,11 +234,32 @@ struct NoteListView: View {
         NoteRowView(note: note, dateString: rowDate(note))
             .onTapGesture { appState.selectNote(note) }
             .contextMenu {
-                Button("Delete Note", role: .destructive) { appState.deleteNote(note) }
+                if appState.isTrashSelected {
+                    Button("Restore") { appState.restoreNote(note) }
+                    Button("Delete Permanently", role: .destructive) { appState.permanentlyDeleteNote(note) }
+                } else {
+                    Button(note.isPinned ? "Unpin Note" : "Pin Note") { appState.togglePin(note) }
+                    Button("Delete Note", role: .destructive) { appState.deleteNote(note) }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func trashedFolderRow(_ folder: Folder) -> some View {
+        Text(folder.title)
+            .font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Restore") { appState.restoreFolder(folder) }
+                Button("Delete Permanently", role: .destructive) { appState.permanentlyDeleteFolder(folder) }
             }
     }
 
     private var navigationTitle: String {
+        if appState.isTrashSelected { return "Trash" }
         if !appState.searchText.isEmpty { return "Search Results" }
         return appState.selectedFolder?.title ?? "All Notes"
     }
@@ -201,10 +270,10 @@ struct NoteListView: View {
             Image(systemName: appState.searchText.isEmpty ? "note.text" : "magnifyingglass")
                 .font(.system(size: 40))
                 .foregroundStyle(.quaternary)
-            Text(appState.searchText.isEmpty ? "No Notes" : "No Results")
+            Text(appState.searchText.isEmpty ? (appState.isTrashSelected ? "Trash Is Empty" : "No Notes") : "No Results")
                 .font(.headline)
                 .foregroundStyle(.secondary)
-            if appState.searchText.isEmpty {
+            if appState.searchText.isEmpty && !appState.isTrashSelected {
                 Button("Create a Note") { appState.createNote() }
                     .buttonStyle(.borderedProminent)
             }
@@ -227,31 +296,49 @@ struct NoteRowView: View {
 
     private var isSelected: Bool { appState.selectedNoteID == note.id }
 
+    // Mirrors Apple Notes' list row thumbnail — square, rounded, first image only.
+    private var thumbnailURL: URL? {
+        note.firstImageResourceId.flatMap { DatabaseManager.shared.resourceLocalFileURL(id: $0) }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
 
-            // Line 1 — title
-            HStack(spacing: 4) {
-                if note.isTodo {
-                    Image(systemName: note.todoCompleted ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(note.todoCompleted ? Color.orange : Color.secondary)
-                        .font(.system(size: 13))
+                // Line 1 — title
+                HStack(spacing: 4) {
+                    if note.isTodo {
+                        Image(systemName: note.todoCompleted ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(note.todoCompleted ? Color.orange : Color.secondary)
+                            .font(.system(size: 13))
+                    }
+                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
                 }
-                Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
 
-            // Line 2 — date + preview on one line
-            let subtitle = note.preview.isEmpty
-                ? dateString
-                : "\(dateString)  \(note.preview)"
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(isSelected ? Color.primary.opacity(0.75) : Color.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+                // Line 2 — date + preview on one line
+                let subtitle = note.preview.isEmpty
+                    ? dateString
+                    : "\(dateString)  \(note.preview)"
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? Color.primary.opacity(0.75) : Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let thumbnailURL {
+                AsyncImage(url: thumbnailURL) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Color.clear
+                }
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
