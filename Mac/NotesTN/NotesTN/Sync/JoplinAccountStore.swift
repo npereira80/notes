@@ -5,6 +5,11 @@ struct JoplinAccount: Codable, Equatable {
     let email: String
     let sessionId: String
     let userId: String
+    // Stored (Keychain-encrypted, same as the rest of this struct) so a dead session
+    // (Joplin Cloud sessions are fixed-12-hour, non-renewable — see SessionModel.ts on
+    // the server) can be silently replaced with a fresh one via JoplinCloudApi.login()
+    // instead of forcing the user to type their password in again. See AppState.syncNow.
+    let password: String
 }
 
 /// Persists the Joplin Cloud session (email + session id + user id) in the macOS

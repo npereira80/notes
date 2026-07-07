@@ -148,13 +148,18 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        if navigationAction.navigationType == .linkActivated,
-           let url = navigationAction.request.url {
-            decisionHandler(.cancel)
-            NSWorkspace.shared.open(url)
-            return
+        // WebKit always calls navigation delegate methods on the main thread, so it's
+        // safe to assume isolation here — navigationAction's properties are main-actor
+        // isolated in the current SDK even though this delegate method itself isn't.
+        MainActor.assumeIsolated {
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                decisionHandler(.cancel)
+                NSWorkspace.shared.open(url)
+                return
+            }
+            decisionHandler(.allow)
         }
-        decisionHandler(.allow)
     }
 
     // MARK: Image insertion
@@ -176,7 +181,11 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 /// Overriding hitTest here ensures only points actually inside this view are handled.
 final class EditorWebView: WKWebView {
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point) else { return nil }
+        // `point` arrives in the superview's coordinate space, not our own — must
+        // convert before comparing against `bounds`, or this check is meaningless
+        // whenever our frame origin isn't (0, 0) in the superview (the normal case).
+        let localPoint = superview?.convert(point, to: self) ?? point
+        guard bounds.contains(localPoint) else { return nil }
         return super.hitTest(point)
     }
 }
@@ -195,6 +204,11 @@ struct RichTextEditorView: NSViewRepresentable {
         wv.setValue(false, forKey: "drawsBackground") // transparent — body bg handles color
         wv.navigationDelegate = coordinator
         coordinator.webView = wv
+        #if DEBUG
+        // Lets Safari's Develop menu attach to this WKWebView (Develop > [device name] >
+        // NotesTN) for real console errors/breakpoints — debug builds only.
+        if #available(macOS 13.3, *) { wv.isInspectable = true }
+        #endif
 
         // Load editor.html from the app bundle.
         // allowingReadAccessTo must cover BOTH the bundle directory (editor.html,
@@ -255,6 +269,7 @@ struct EditorView: View {
                 .foregroundStyle(.secondary)
             Button("New Note") { appState.createNote() }
                 .keyboardShortcut("n", modifiers: .command)
+                .tint(Color.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.windowBackground)
@@ -325,6 +340,7 @@ struct NoteEditorView: View {
                     Button { appState.createNote() } label: {
                         Image(systemName: "square.and.pencil")
                     }
+                    .foregroundStyle(Color.secondary)
                     .help("New Note (⌘N)")
                 }
             }
@@ -545,9 +561,6 @@ struct EditorToolbarView: View {
             }
             FormatButton(icon: "minus", tooltip: "Horizontal Rule") {
                 coordinator.execCommand("horizontalRule")
-            }
-            FormatButton(icon: "arrowtriangle.right.square", tooltip: "Toggle Block") {
-                coordinator.execCommand("toggle")
             }
 
             Divider().frame(height: 16)

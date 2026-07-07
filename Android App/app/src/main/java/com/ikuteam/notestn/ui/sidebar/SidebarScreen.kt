@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.CreateNewFolder
@@ -40,11 +41,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ikuteam.notestn.data.Folder
+import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.viewmodel.NotesViewModel
 
 /**
@@ -81,7 +84,11 @@ fun SidebarScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
+            FloatingActionButton(
+                onClick = { showAddDialog = true },
+                containerColor = NotesYellowVivid,
+                contentColor = Color.Black,
+            ) {
                 Icon(Icons.Default.CreateNewFolder, contentDescription = "Add Notebook")
             }
         }
@@ -206,20 +213,25 @@ private fun NotebookRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // Margin from the list edge + rounded corners on the selection
+            // background — mirrors Mac's SidebarView.swift rowBackground and
+            // NoteRow's own rounded/inset selection below.
+            .padding(horizontal = 8.dp)
+            .clip(RoundedCornerShape(6.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .background(if (selected) NotesYellowVivid else Color.Transparent)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             icon,
             contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (selected) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.width(16.dp))
         Text(
             title,
-            color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+            color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface,
         )
     }
 }

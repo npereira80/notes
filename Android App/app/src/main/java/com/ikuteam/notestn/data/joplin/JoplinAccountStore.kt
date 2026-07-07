@@ -12,7 +12,11 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-data class JoplinAccount(val email: String, val sessionId: String, val userId: String)
+// password is stored (Keystore-encrypted, same as sessionId) so a dead session
+// (Joplin Cloud sessions are fixed-12-hour, non-renewable — see SessionModel.ts on the
+// server) can be silently replaced with a fresh one via JoplinCloudApi.login() instead
+// of forcing the user to type their password in again. See NotesViewModel's sync retry.
+data class JoplinAccount(val email: String, val sessionId: String, val userId: String, val password: String)
 
 /**
  * Persists the Joplin Cloud session (email + session id + user id) to disk, encrypted
@@ -40,6 +44,7 @@ class JoplinAccountStore private constructor(context: Context) {
             .putString(KEY_EMAIL, account.email)
             .putString(KEY_USER_ID, account.userId)
             .putString(KEY_SESSION_ID, encrypt(account.sessionId))
+            .putString(KEY_PASSWORD, encrypt(account.password))
             .apply()
         _account.value = account
     }
@@ -54,7 +59,9 @@ class JoplinAccountStore private constructor(context: Context) {
         val userId = prefs.getString(KEY_USER_ID, null) ?: return null
         val encryptedSessionId = prefs.getString(KEY_SESSION_ID, null) ?: return null
         val sessionId = runCatching { decrypt(encryptedSessionId) }.getOrNull() ?: return null
-        return JoplinAccount(email = email, sessionId = sessionId, userId = userId)
+        val encryptedPassword = prefs.getString(KEY_PASSWORD, null) ?: return null
+        val password = runCatching { decrypt(encryptedPassword) }.getOrNull() ?: return null
+        return JoplinAccount(email = email, sessionId = sessionId, userId = userId, password = password)
     }
 
     // MARK: - Android Keystore AES-GCM helpers
@@ -100,6 +107,7 @@ class JoplinAccountStore private constructor(context: Context) {
         private const val KEY_EMAIL = "email"
         private const val KEY_USER_ID = "user_id"
         private const val KEY_SESSION_ID = "session_id"
+        private const val KEY_PASSWORD = "password"
 
         @Volatile
         private var instance: JoplinAccountStore? = null

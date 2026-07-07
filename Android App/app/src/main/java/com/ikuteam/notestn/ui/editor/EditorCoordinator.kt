@@ -31,6 +31,11 @@ class EditorCoordinator {
     var onContentChanged: ((title: String, body: String) -> Unit)? = null
     var onImageRequested: ((dataUri: String) -> Unit)? = null
     var onOpenUrl: ((String) -> Unit)? = null
+    // True while the ProseMirror editor's contentEditable region has keyboard
+    // focus (vs. the note list) — drives the selected note row's Gray (editor
+    // focused) vs. Dimmed yellow (list focused) background in the tablet
+    // two-pane layout. See NotesViewModel.isEditorFocused.
+    var onFocusChanged: ((Boolean) -> Unit)? = null
 
     private val jsonCoder = Json { ignoreUnknownKeys = true }
 
@@ -47,6 +52,7 @@ class EditorCoordinator {
             "selectionChanged" -> message.selectionState?.let { selectionState = it }
             "imageRequested" -> message.html?.let { onImageRequested?.invoke(it) }
             "openUrl" -> message.url?.let { onOpenUrl?.invoke(it) }
+            "focusChanged" -> message.focused?.let { onFocusChanged?.invoke(it) }
             "log" -> Log.d("EditorJS", message.message ?: "")
         }
     }

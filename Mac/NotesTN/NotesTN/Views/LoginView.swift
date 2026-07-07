@@ -66,7 +66,7 @@ struct LoginView: View {
             isLoggingIn = false
             switch result {
             case .success(let session):
-                store.save(JoplinAccount(email: email, sessionId: session.sessionId, userId: session.userId))
+                store.save(JoplinAccount(email: email, sessionId: session.sessionId, userId: session.userId, password: password))
                 dismiss()
             case .failure(let error):
                 errorMessage = error.localizedDescription

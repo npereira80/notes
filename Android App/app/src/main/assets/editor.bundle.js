@@ -15658,6 +15658,8 @@
       dispatchTransaction: (tr) => dispatchWithNotify(view)(tr),
       editable: () => !isReadOnly
     });
+    view.dom.addEventListener("focus", () => postToNative({ type: "focusChanged", focused: true }));
+    view.dom.addEventListener("blur", () => postToNative({ type: "focusChanged", focused: false }));
     notifySelection(view.state);
     return view;
   }
@@ -15671,14 +15673,16 @@
     }
     const bridge = {
       setContent(title, body) {
-        const titleNode = schema_default.nodes.title.create(null, title ? schema_default.text(title) : void 0);
-        const parser = DOMParser2.fromSchema(schema_default);
         const domParser = new DOMParser();
         const dom = domParser.parseFromString(body || "<p></p>", "text/html");
-        const bodySlice = parser.parseSlice(dom.body, { preserveWhitespace: true });
-        const content = bodySlice.content.addToStart(titleNode);
+        const titleDiv = dom.createElement("div");
+        titleDiv.className = "pm-title";
+        if (title) titleDiv.textContent = title;
+        dom.body.insertBefore(titleDiv, dom.body.firstChild);
+        const parser = DOMParser2.fromSchema(schema_default);
+        const doc3 = parser.parse(dom.body, { preserveWhitespace: true });
         const newState = EditorState.create({
-          doc: schema_default.nodes.doc.create(null, content),
+          doc: doc3,
           plugins: view.state.plugins
         });
         view.updateState(newState);

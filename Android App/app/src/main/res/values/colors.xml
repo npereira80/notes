@@ -7,6 +7,10 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <!-- Same brand yellow as ui/theme/Color.kt NotesYellow / Mac AccentColor (#FFD60A) -->
-    <color name="notes_yellow">#FFFFD60A</color>
+    <!-- Brand yellow palette — same values in light/dark, mirrored in
+         ui/theme/Color.kt and Mac's AppColors.swift / EditorBundle build.mjs. -->
+    <color name="notes_yellow_vivid">#FFF9B524</color>
+    <color name="notes_yellow_dark">#FFDEAA33</color>
+    <color name="notes_yellow_dimmed">#FFFBE699</color>
+    <color name="notes_yellow_text_select">#FFFAEBC3</color>
 </resources>

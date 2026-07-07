@@ -72,11 +72,28 @@ struct Note: Identifiable, Hashable, Equatable {
     var firstImageResourceId: String? {
         guard let imgRange = body.range(of: "<img\\b[^>]*>", options: .regularExpression) else { return nil }
         let imgTag = String(body[imgRange])
-        guard let idRange = imgTag.range(of: "data-resource-id=\"([^\"]*)\"", options: .regularExpression) else { return nil }
-        let attr = String(imgTag[idRange])
-        let value = attr
-            .replacingOccurrences(of: "data-resource-id=\"", with: "")
-            .replacingOccurrences(of: "\"", with: "")
-        return value.isEmpty ? nil : value
+
+        // Locally-inserted/pasted images carry this explicitly (see
+        // EditorView.handleImagePick/copyDataUriIntoResources → EditorCoordinator
+        // .insertImage → the ProseMirror image node's data-resource-id attribute).
+        if let idRange = imgTag.range(of: "data-resource-id=\"([^\"]*)\"", options: .regularExpression) {
+            let attr = String(imgTag[idRange])
+            let value = attr
+                .replacingOccurrences(of: "data-resource-id=\"", with: "")
+                .replacingOccurrences(of: "\"", with: "")
+            if !value.isEmpty { return value }
+        }
+
+        // Images pulled from Joplin Cloud never get that attribute — MarkdownToHtml
+        // .convert and JoplinSyncEngine's rewriteResourceLinks both just rewrite `src`
+        // to a local file:// URL, no data-resource-id. Every resource is saved locally
+        // as "<resourceId>.<ext>" (see DatabaseManager.saveResource), so recover the id
+        // from the src path's last component instead of requiring the attribute.
+        if let srcRange = imgTag.range(of: "src=\"[^\"]*/[0-9a-fA-F]{32}\\.[A-Za-z0-9]+\"", options: .regularExpression),
+           let idRange = imgTag[srcRange].range(of: "[0-9a-fA-F]{32}", options: .regularExpression) {
+            return String(imgTag[idRange])
+        }
+
+        return nil
     }
 }

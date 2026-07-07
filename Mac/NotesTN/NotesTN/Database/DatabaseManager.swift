@@ -447,6 +447,19 @@ final class DatabaseManager {
         }
     }
 
+    /// True if [id] is queued for a remote delete that hasn't been pushed yet — used by
+    /// pull's upsert functions to avoid resurrecting an item we've already permanently
+    /// deleted locally but haven't told the server about (pull runs before push, so the
+    /// server still has its old copy at that point).
+    func hasPendingDelete(id: String) -> Bool {
+        var exists = false
+        withStatement("SELECT 1 FROM pending_deletes WHERE id = ? LIMIT 1") { stmt in
+            bind(stmt, 1, id)
+            exists = sqlite3_step(stmt) == SQLITE_ROW
+        }
+        return exists
+    }
+
     func searchNotes(query: String) -> [Note] {
         let sql = """
         SELECT id, parent_id, title, body, created_time, updated_time,

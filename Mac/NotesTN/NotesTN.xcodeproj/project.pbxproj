@@ -29,6 +29,7 @@
 		G1A1A1A1A1A1A1A1A1A1A1A1 /* MiniHtmlParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = G2A2A2A2A2A2A2A2A2A2A2A2 /* MiniHtmlParser.swift */; };
 		G3A3A3A3A3A3A3A3A3A3A3A3 /* HtmlToMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = G4A4A4A4A4A4A4A4A4A4A4A4 /* HtmlToMarkdown.swift */; };
 		G5A5A5A5A5A5A5A5A5A5A5A5 /* JoplinItemSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = G6A6A6A6A6A6A6A6A6A6A6A6 /* JoplinItemSerializer.swift */; };
+		H1A1A1A1A1A1A1A1A1A1A1A1 /* AppColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,12 +39,15 @@
 		A7B8C9D0E1F2A3B4C5D6E7F8 /* Folder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Folder.swift; sourceTree = "<group>"; };
 		A9B0C1D2E3F4A5B6C7D8E9F0 /* DatabaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseManager.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A6B7C8D9E0F1A2 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
-		E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = editor.html; sourceTree = "<group>"; };
-		E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = editor.bundle.js; sourceTree = "<group>"; };
-		E7F8A9B0C1D2E3F4A5B6C7D8 /* Resource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resource.swift; sourceTree = "<group>"; };
 		B3C4D5E6F7A8B9C0D1E2F3A4 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		B5C6D7E8F9A0B1C2D3E4F5A6 /* NoteListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListView.swift; sourceTree = "<group>"; };
 		B7C8D9E0F1A2B3C4D5E6F7A8 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
+		B9C0D1E2F3A4B5C6D7E8F9A0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C1D2E3F4A5B6C7D8E9F0A1B2 /* NotesTN.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotesTN.entitlements; sourceTree = "<group>"; };
+		C9D0E1F2A3B4C5D6E7F8A9B0 /* NotesTN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotesTN.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = editor.html; sourceTree = "<group>"; };
+		E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = editor.bundle.js; sourceTree = "<group>"; };
+		E7F8A9B0C1D2E3F4A5B6C7D8 /* Resource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resource.swift; sourceTree = "<group>"; };
 		F2A2A2A2A2A2A2A2A2A2A2A2 /* JoplinCloudApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinCloudApi.swift; sourceTree = "<group>"; };
 		F4A4A4A4A4A4A4A4A4A4A4A4 /* JoplinAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinAccountStore.swift; sourceTree = "<group>"; };
 		F6A6A6A6A6A6A6A6A6A6A6A6 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
@@ -53,9 +57,7 @@
 		G2A2A2A2A2A2A2A2A2A2A2A2 /* MiniHtmlParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniHtmlParser.swift; sourceTree = "<group>"; };
 		G4A4A4A4A4A4A4A4A4A4A4A4 /* HtmlToMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HtmlToMarkdown.swift; sourceTree = "<group>"; };
 		G6A6A6A6A6A6A6A6A6A6A6A6 /* JoplinItemSerializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinItemSerializer.swift; sourceTree = "<group>"; };
-		B9C0D1E2F3A4B5C6D7E8F9A0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		C1D2E3F4A5B6C7D8E9F0A1B2 /* NotesTN.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotesTN.entitlements; sourceTree = "<group>"; };
-		C9D0E1F2A3B4C5D6E7F8A9B0 /* NotesTN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotesTN.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColors.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,7 +71,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		C2D3E4F5A6B7C8D9E0F1A2B3 /* Main */ = {
+		C2D3E4F5A6B7C8D9E0F1A2B3 = {
 			isa = PBXGroup;
 			children = (
 				C4D5E6F7A8B9C0D1E2F3A4B5 /* NotesTN */,
@@ -89,6 +91,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* NotesTNApp.swift */,
+				H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */,
 				A3B4C5D6E7F8A9B0C1D2E3F4 /* ContentView.swift */,
 				C5D6E7F8A9B0C1D2E3F4A5B6 /* Models */,
 				C6D7E8F9A0B1C2D3E4F5A6B7 /* Database */,
@@ -100,15 +103,6 @@
 				C1D2E3F4A5B6C7D8E9F0A1B2 /* NotesTN.entitlements */,
 			);
 			path = NotesTN;
-			sourceTree = "<group>";
-		};
-		E5F6A7B8C9D0E1F2A3B4C5D6 /* Editor */ = {
-			isa = PBXGroup;
-			children = (
-				E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */,
-				E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */,
-			);
-			path = Editor;
 			sourceTree = "<group>";
 		};
 		C5D6E7F8A9B0C1D2E3F4A5B6 /* Models */ = {
@@ -146,6 +140,15 @@
 				F6A6A6A6A6A6A6A6A6A6A6A6 /* LoginView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		E5F6A7B8C9D0E1F2A3B4C5D6 /* Editor */ = {
+			isa = PBXGroup;
+			children = (
+				E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */,
+				E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */,
+			);
+			path = Editor;
 			sourceTree = "<group>";
 		};
 		F7A7A7A7A7A7A7A7A7A7A7A7 /* Sync */ = {
@@ -235,6 +238,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A2B3C4D5E6F7A8B9C0D1E2F3 /* NotesTNApp.swift in Sources */,
+				H1A1A1A1A1A1A1A1A1A1A1A1 /* AppColors.swift in Sources */,
 				A4B5C6D7E8F9A0B1C2D3E4F5 /* ContentView.swift in Sources */,
 				A6B7C8D9E0F1A2B3C4D5E6F7 /* Note.swift in Sources */,
 				A8B9C0D1E2F3A4B5C6D7E8F9 /* Folder.swift in Sources */,
@@ -382,11 +386,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "NotesTN/NotesTN.entitlements";
+				CODE_SIGN_ENTITLEMENTS = NotesTN/NotesTN.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = HDYX3W9SZJ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -400,7 +406,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.ikuteam.NotesTN";
+				PRODUCT_BUNDLE_IDENTIFIER = com.ikuteam.NotesTN;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -412,11 +418,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "NotesTN/NotesTN.entitlements";
+				CODE_SIGN_ENTITLEMENTS = NotesTN/NotesTN.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = HDYX3W9SZJ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -430,7 +438,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.ikuteam.NotesTN";
+				PRODUCT_BUNDLE_IDENTIFIER = com.ikuteam.NotesTN;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -459,7 +467,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = D4E5F6A7B8C9D0E1F2A3B4C5 /* Project object */;
 }

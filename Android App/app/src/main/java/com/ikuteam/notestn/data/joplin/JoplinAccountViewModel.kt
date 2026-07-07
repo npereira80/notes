@@ -30,7 +30,7 @@ class JoplinAccountViewModel(application: Application) : AndroidViewModel(applic
             val result = JoplinCloudApi.login(email, password)
             _isLoggingIn.value = false
             result.onSuccess { session ->
-                store.save(JoplinAccount(email = email, sessionId = session.id, userId = session.userId))
+                store.save(JoplinAccount(email = email, sessionId = session.id, userId = session.userId, password = password))
                 onSuccess()
             }.onFailure { error ->
                 _loginError.value = when (error) {

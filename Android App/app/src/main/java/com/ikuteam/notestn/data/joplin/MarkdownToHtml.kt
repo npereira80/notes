@@ -25,7 +25,7 @@ object MarkdownToHtml {
     private val hrRegex = Regex("^([-*_])(\\s*\\1){2,}\\s*$")
 
     fun convert(markdown: String): String {
-        val lines = markdown.replace("\r\n", "\n").split("\n")
+        val lines = stripFrontmatter(markdown.replace("\r\n", "\n")).split("\n")
         val html = StringBuilder()
 
         var i = 0
@@ -134,6 +134,23 @@ object MarkdownToHtml {
         return html.toString().trim()
     }
 
+    /**
+     * Strips a leading YAML frontmatter block (e.g. from notes imported from other
+     * apps/exports) — a "---" line, some metadata lines, then a closing "---" line —
+     * which would otherwise render as a literal paragraph of "date: ..." text at the
+     * top of the note. Only touches text that actually opens AND closes with "---";
+     * leaves everything alone otherwise, to avoid eating real content on a false
+     * positive (e.g. a note that legitimately starts with a horizontal rule).
+     */
+    private fun stripFrontmatter(markdown: String): String {
+        val lines = markdown.split("\n")
+        if (lines.firstOrNull()?.trim() != "---") return markdown
+        val closingIndex = lines.drop(1).indexOfFirst { it.trim() == "---" }
+        if (closingIndex == -1) return markdown
+        // +1 to account for the drop(1) offset, +1 again since indices are inclusive.
+        return lines.subList(closingIndex + 2, lines.size).joinToString("\n")
+    }
+
     /** Inline formatting within a line/paragraph: images, links, bold, italic, code. */
     private fun inline(text: String): String {
         var result = escapeHtml(text)
@@ -167,14 +184,27 @@ object MarkdownToHtml {
         return trimmed.split("|").map { it.trim() }
     }
 
-    private fun escapeHtml(text: String): String = text
-        // Some Joplin clients write a literal "&nbsp;" entity into the Markdown source
-        // to preserve an otherwise-empty line (a plain blank line would just be a
-        // paragraph separator). Decode it to a real non-breaking space *before*
-        // escaping "&", otherwise it becomes "&amp;nbsp;" and shows up as literal
-        // "&nbsp;" text instead of rendering as blank space.
-        .replace("&nbsp;", " ")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+    // Some Joplin clients (and browser-based Markdown editors) write a raw inline
+    // "<br>" tag into the Markdown source for a line break within a paragraph —
+    // valid Markdown (raw inline HTML passes through untouched), which every
+    // Joplin client renders as an actual break. escapeHtml below escapes ALL
+    // "<"/">" unconditionally though, so without this it turns into literal
+    // "&lt;br&gt;" and shows up on screen as the text "<br>" instead of breaking
+    // the line — this regex restores it to a real (unescaped) <br> afterward, which
+    // the editor's `hard_break` schema node (parseDOM: [{ tag: 'br' }]) understands.
+    private val brRegex = Regex("&lt;br\\s*/?&gt;", RegexOption.IGNORE_CASE)
+
+    private fun escapeHtml(text: String): String {
+        val escaped = text
+            // Some Joplin clients write a literal "&nbsp;" entity into the Markdown source
+            // to preserve an otherwise-empty line (a plain blank line would just be a
+            // paragraph separator). Decode it to a real non-breaking space *before*
+            // escaping "&", otherwise it becomes "&amp;nbsp;" and shows up as literal
+            // "&nbsp;" text instead of rendering as blank space.
+            .replace("&nbsp;", "\u00A0")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        return brRegex.replace(escaped, "<br>")
+    }
 }

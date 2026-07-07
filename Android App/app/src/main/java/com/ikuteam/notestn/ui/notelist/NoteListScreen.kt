@@ -75,7 +75,10 @@ import com.ikuteam.notestn.ui.theme.CardBackgroundDark
 import com.ikuteam.notestn.ui.theme.CardBackgroundLight
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
-import com.ikuteam.notestn.ui.theme.NotesYellow
+import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveDark
+import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveLight
+import com.ikuteam.notestn.ui.theme.NotesYellowDimmed
+import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
 import com.ikuteam.notestn.viewmodel.NotesViewModel
@@ -95,17 +98,18 @@ private sealed class NoteGroup(val order: Int) {
     object Yesterday : NoteGroup(1)
     object Previous7Days : NoteGroup(2)
     object Previous30Days : NoteGroup(3)
-    data class Month(val year: Int, val month: Int) : NoteGroup(4)
+    // Current year only, e.g. "March" — older years are grouped whole via Year below,
+    // with no month breakdown.
+    data class Month(val month: Int) : NoteGroup(4)
+    data class Year(val year: Int) : NoteGroup(5)
 
     fun title(currentYear: Int): String = when (this) {
         Today -> "Today"
         Yesterday -> "Yesterday"
         Previous7Days -> "Previous 7 Days"
         Previous30Days -> "Previous 30 Days"
-        is Month -> {
-            val monthName = java.time.Month.of(month).getDisplayName(TextStyle.FULL, Locale.getDefault())
-            if (year == currentYear) monthName else "$monthName $year"
-        }
+        is Month -> java.time.Month.of(month).getDisplayName(TextStyle.FULL, Locale.getDefault())
+        is Year -> year.toString()
     }
 }
 
@@ -122,7 +126,8 @@ private fun groupFor(note: Note, today: LocalDate): NoteGroup {
         days == 1L -> NoteGroup.Yesterday
         days < 7 -> NoteGroup.Previous7Days
         days < 30 -> NoteGroup.Previous30Days
-        else -> NoteGroup.Month(noteDate.year, noteDate.monthValue)
+        noteDate.year == today.year -> NoteGroup.Month(noteDate.monthValue)
+        else -> NoteGroup.Year(noteDate.year)
     }
 }
 
@@ -272,6 +277,7 @@ fun NoteListScreen(
                             note = note,
                             dateString = rowDateString(note, today),
                             selected = note.id == selectedNoteId,
+                            editorFocused = viewModel.isEditorFocused,
                             isTrash = isTrash,
                             onClick = { onNoteClick(note) },
                             onDelete = { viewModel.deleteNote(note) },
@@ -288,7 +294,13 @@ fun NoteListScreen(
                 val pinnedNotes = if (isTrash) emptyList() else notes.filter { it.isPinned }.sortedByDescending { it.updatedTime }
                 val unpinnedNotes = if (isTrash) notes else notes.filterNot { it.isPinned }
                 val grouped = unpinnedNotes.groupBy { groupFor(it, today) }
-                    .toSortedMap(compareBy({ it.order }, { (it as? NoteGroup.Month)?.year?.let { y -> -y } ?: 0 }, { (it as? NoteGroup.Month)?.month?.let { m -> -m } ?: 0 }))
+                    .toSortedMap(
+                        compareBy(
+                            { it.order },
+                            { (it as? NoteGroup.Month)?.month?.let { m -> -m } ?: 0 },
+                            { (it as? NoteGroup.Year)?.year?.let { y -> -y } ?: 0 }
+                        )
+                    )
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -315,6 +327,7 @@ fun NoteListScreen(
                                             note = note,
                                             dateString = rowDateString(note, today),
                                             selected = note.id == selectedNoteId,
+                                            editorFocused = viewModel.isEditorFocused,
                                             isTrash = false,
                                             onClick = { onNoteClick(note) },
                                             onDelete = { viewModel.deleteNote(note) },
@@ -391,6 +404,7 @@ fun NoteListScreen(
                                             note = note,
                                             dateString = rowDateString(note, today),
                                             selected = note.id == selectedNoteId,
+                                            editorFocused = viewModel.isEditorFocused,
                                             isTrash = isTrash,
                                             onClick = { onNoteClick(note) },
                                             onDelete = { viewModel.deleteNote(note) },
@@ -467,6 +481,8 @@ private fun FloatingSearchAndAddBar(
             FloatingActionButton(
                 onClick = onNewNote,
                 shape = RoundedCornerShape(14.dp),
+                containerColor = NotesYellowVivid,
+                contentColor = Color.Black,
                 // Default FAB elevation (6dp/6dp/6dp/8dp), halved.
                 elevation = FloatingActionButtonDefaults.elevation(
                     defaultElevation = 3.dp,
@@ -548,6 +564,7 @@ private fun NoteRow(
     note: Note,
     dateString: String,
     selected: Boolean,
+    editorFocused: Boolean = false,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     isTrash: Boolean = false,
@@ -560,17 +577,45 @@ private fun NoteRow(
     val thumbnailFile = remember(note.id, note.body) {
         note.firstImageResourceId?.let { DatabaseManager.shared.resourceLocalFile(it) }
     }
+    val darkTheme = isSystemInDarkTheme()
 
     Box {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                // Margin from the list edge + rounded corners on the selection
+                // background — mirrors Mac's NoteListView.swift and the sidebar's
+                // own rounded/inset selection above.
+                .padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .combinedClickable(onClick = onClick, onLongClick = { showMenu = true })
-                .background(if (selected) NotesYellow else Color.Transparent)
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                .background(
+                    if (selected) {
+                        // editorFocused = the editor pane has focus (typing) in the
+                        // tablet two-pane layout -> Gray. Otherwise the note list has
+                        // focus (browsing) -> Dimmed yellow. See NotesViewModel.isEditorFocused.
+                        if (editorFocused) {
+                            if (darkTheme) NoteRowSelectedInactiveDark else NoteRowSelectedInactiveLight
+                        } else {
+                            NotesYellowDimmed
+                        }
+                    } else {
+                        Color.Transparent
+                    }
+                )
+                // Only the start (left) side is shared at the Row level now — the end
+                // (right) side is applied to the text column instead, so the thumbnail
+                // can sit flush against the row's right edge (0 padding) independent of
+                // the text's own right margin.
+                .padding(start = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-        Column(modifier = Modifier.weight(1f)) {
+        // Text column carries its own vertical + end (right) padding now (used to come
+        // from the Row above, shared with the thumbnail) so the thumbnail's own padding
+        // can be set independently, without relying on a negative-padding counter-hack
+        // (Compose's Modifier.padding throws at runtime on negative values, unlike
+        // SwiftUI's).
+        Column(modifier = Modifier.weight(1f).padding(top = 16.dp, end = 16.dp, bottom = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (note.isTodo) {
                     Icon(
@@ -606,9 +651,12 @@ private fun NoteRow(
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .padding(start = 12.dp)
+                        // Independent of the text column's own vertical padding (above) —
+                        // the Row itself no longer applies shared vertical padding, so this
+                        // 4dp is the thumbnail's real, direct top/bottom gap.
+                        .padding(start = 12.dp, top = 4.dp, end = 6.dp, bottom = 4.dp)
                         .size(56.dp)
-                        .clip(RoundedCornerShape(14.dp)),
+                        .clip(RoundedCornerShape(10.dp)),
                 )
             }
         }

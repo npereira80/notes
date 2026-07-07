@@ -17,11 +17,15 @@ actor JoplinSyncEngine {
 
     enum SyncOutcome {
         case success(notesUpdated: Int, foldersUpdated: Int, notesPushed: Int, foldersPushed: Int, resourcesPushed: Int)
+        // Distinct from .failure so the caller (AppState.syncNow) can attempt a silent
+        // re-login and retry, instead of just surfacing an error message.
+        case unauthorized
         case failure(String)
     }
 
     private enum PushOutcome {
         case success(notesPushed: Int, foldersPushed: Int, resourcesPushed: Int)
+        case unauthorized
         case failure(String)
     }
 
@@ -51,7 +55,7 @@ actor JoplinSyncEngine {
             let result = await JoplinCloudApi.delta(sessionId: sessionId, cursor: pageCursor)
             switch result {
             case .failure(let error):
-                return .failure(describeError(error))
+                return mapFailure(error)
             case .success(let delta):
                 allChanges.append(contentsOf: delta.items)
                 hasMorePages = delta.hasMore
@@ -81,7 +85,7 @@ actor JoplinSyncEngine {
             }
 
             switch await JoplinCloudApi.itemContent(sessionId: sessionId, itemName: itemName) {
-            case .failure(let error): return .failure(describeError(error))
+            case .failure(let error): return mapFailure(error)
             case .success(let content): parsedItems.append(JoplinItemParser.parse(content))
             }
         }
@@ -99,7 +103,17 @@ actor JoplinSyncEngine {
             }
         }
 
+        // One-time cleanup: only ever runs during a Force Resync (see doc comment on
+        // `force` above), and self-deactivates via headingCleanupDoneKey after its first
+        // successful pass, so it never touches notes again after the import artifact is
+        // cleaned up.
+        if force {
+            runHeadingCleanupIfNeeded()
+        }
+
         switch await push(sessionId: sessionId) {
+        case .unauthorized:
+            return .unauthorized
         case .failure(let message):
             return .failure(message)
         case .success(let notesPushed, let foldersPushed, let resourcesPushed):
@@ -122,13 +136,13 @@ actor JoplinSyncEngine {
     private func push(sessionId: String) async -> PushOutcome {
         for pending in db.fetchPendingDeletes() {
             if case .failure(let error) = await JoplinCloudApi.deleteItem(sessionId: sessionId, itemName: "\(pending.id).md") {
-                return .failure(describeError(error))
+                return mapPushFailure(error)
             }
             // A resource is two separate remote files — its `{id}.md` metadata (just
             // deleted above) and its binary blob at `.resource/{id}` — both need removing.
             if pending.itemType == "resource" {
                 if case .failure(let error) = await JoplinCloudApi.deleteItem(sessionId: sessionId, itemName: ".resource/\(pending.id)") {
-                    return .failure(describeError(error))
+                    return mapPushFailure(error)
                 }
             }
             db.clearPendingDelete(id: pending.id)
@@ -138,14 +152,14 @@ actor JoplinSyncEngine {
         for resource in db.fetchDirtyResources() {
             let metadata = Data(JoplinItemSerializer.serialize(resource).utf8)
             if case .failure(let error) = await JoplinCloudApi.putItemContent(sessionId: sessionId, itemName: "\(resource.id).md", content: metadata) {
-                return .failure(describeError(error))
+                return mapPushFailure(error)
             }
             guard let dir = db.resourcesDirectory,
                   let bytes = try? Data(contentsOf: dir.appendingPathComponent(resource.filename)) else {
                 return .failure("Couldn't read local file for resource \(resource.id).")
             }
             if case .failure(let error) = await JoplinCloudApi.putResourceBlob(sessionId: sessionId, resourceId: resource.id, content: bytes) {
-                return .failure(describeError(error))
+                return mapPushFailure(error)
             }
             db.markResourceSynced(id: resource.id)
             resourcesPushed += 1
@@ -155,7 +169,7 @@ actor JoplinSyncEngine {
         for note in db.fetchDirtyNotes() {
             let content = Data(JoplinItemSerializer.serialize(note).utf8)
             if case .failure(let error) = await JoplinCloudApi.putItemContent(sessionId: sessionId, itemName: "\(note.id).md", content: content) {
-                return .failure(describeError(error))
+                return mapPushFailure(error)
             }
             db.markNoteSynced(id: note.id)
             notesPushed += 1
@@ -165,7 +179,7 @@ actor JoplinSyncEngine {
         for folder in db.fetchDirtyFolders() {
             let content = Data(JoplinItemSerializer.serialize(folder).utf8)
             if case .failure(let error) = await JoplinCloudApi.putItemContent(sessionId: sessionId, itemName: "\(folder.id).md", content: content) {
-                return .failure(describeError(error))
+                return mapPushFailure(error)
             }
             db.markFolderSynced(id: folder.id)
             foldersPushed += 1
@@ -176,6 +190,10 @@ actor JoplinSyncEngine {
 
     private func upsertNote(_ parsed: JoplinItemParser.ParsedItem, force: Bool) -> Bool {
         guard let id = parsed.props["id"] else { return false }
+        // Already permanently deleted locally, pending a push to remove it from the
+        // server too — pull runs before push, so the server's still-current copy would
+        // otherwise resurrect it here just before push tells the server to delete it.
+        if db.hasPendingDelete(id: id) { return false }
         let remoteUpdatedTime = JoplinItemParser.parseTime(parsed.props["updated_time"])
         if !force, let localUpdatedTime = db.noteUpdatedTime(id: id), localUpdatedTime >= remoteUpdatedTime {
             return false
@@ -202,6 +220,8 @@ actor JoplinSyncEngine {
 
     private func upsertFolder(_ parsed: JoplinItemParser.ParsedItem, force: Bool) -> Bool {
         guard let id = parsed.props["id"] else { return false }
+        // See the matching comment in upsertNote — same resurrection risk.
+        if db.hasPendingDelete(id: id) { return false }
         let remoteUpdatedTime = JoplinItemParser.parseTime(parsed.props["updated_time"])
         if !force, let localUpdatedTime = db.folderUpdatedTime(id: id), localUpdatedTime >= remoteUpdatedTime {
             return false
@@ -243,6 +263,8 @@ actor JoplinSyncEngine {
     /// allowingReadAccessTo file:// access can serve it unchanged.
     private func upsertResource(_ parsed: JoplinItemParser.ParsedItem, sessionId: String, force: Bool) async {
         guard let id = parsed.props["id"] else { return }
+        // See the matching comment in upsertNote — same resurrection risk.
+        if db.hasPendingDelete(id: id) { return }
         if !force && db.resourceExists(id: id) { return }
 
         let mime = parsed.props["mime"] ?? ""
@@ -292,8 +314,77 @@ actor JoplinSyncEngine {
         return result
     }
 
+    /// One-off fix for notes imported from UpNote via Joplin's Markdown import: Joplin's
+    /// importer read each note's leading "## Title" heading as the note's title AND left
+    /// a duplicate copy of that heading in the body, so every imported note showed its
+    /// title twice. Runs at most once (guarded by headingCleanupDoneKey below, flipped to
+    /// true at the end) — strips the note's leading heading only when its text is an
+    /// exact match (after trimming whitespace) for the note's title, then marks the note
+    /// dirty so the push() call right after this uploads the fix to Joplin Cloud too, so
+    /// it sticks after future syncs instead of only fixing the local copy. Only mutates
+    /// `body` on a copy of the existing Note — createdTime/updatedTime are carried over
+    /// untouched, so the note list's date-based ordering doesn't reshuffle.
+    // Flip to true only to re-run the cleanup (e.g. a fresh install where
+    // headingCleanupDoneKey isn't set yet, or a future re-import). Left false after the
+    // one real cleanup pass completed successfully, so the code stays in place but never
+    // runs again even if the UserDefaults flag below were ever cleared.
+    private static let headingCleanupEnabled = false
+    private static let headingCleanupDoneKey = "hasCleanedImportHeadings"
+    // Anchored to the very start of the body on purpose — the importer only ever
+    // duplicated the *first* heading, so later same-named headings must be left alone.
+    private static let leadingHeadingRegex = try! NSRegularExpression(
+        pattern: "^\\s*<h([1-6])[^>]*>(.*?)</h\\1>",
+        options: [.dotMatchesLineSeparators]
+    )
+
+    private func runHeadingCleanupIfNeeded() {
+        guard Self.headingCleanupEnabled else { return }
+        guard !prefs.bool(forKey: Self.headingCleanupDoneKey) else { return }
+        for note in db.fetchNotes(folderId: nil) {
+            guard let fixedBody = Self.stripDuplicateHeading(from: note.body, title: note.title) else { continue }
+            var fixed = note
+            fixed.body = fixedBody
+            db.saveNote(fixed, dirty: true, synced: false)
+        }
+        prefs.set(true, forKey: Self.headingCleanupDoneKey)
+    }
+
+    /// Returns the body with its leading heading removed if that heading's text exactly
+    /// matches the title (after trimming whitespace on both sides), else nil.
+    private static func stripDuplicateHeading(from body: String, title: String) -> String? {
+        let nsBody = body as NSString
+        guard let match = leadingHeadingRegex.firstMatch(in: body, range: NSRange(location: 0, length: nsBody.length)) else {
+            return nil
+        }
+        let rawHeadingText = nsBody.substring(with: match.range(at: 2))
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        let headingText = decodeEntities(rawHeadingText).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard headingText == title.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return nsBody.substring(from: match.range.location + match.range.length)
+    }
+
+    // Same entity set Note.preview already decodes — kept identical for consistency.
+    private static func decodeEntities(_ text: String) -> String {
+        text.replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+    }
+
     private func describeError(_ error: JoplinCloudApi.SyncApiError) -> String {
         error.errorDescription ?? "Sync failed."
+    }
+
+    private func mapFailure(_ error: JoplinCloudApi.SyncApiError) -> SyncOutcome {
+        if case .unauthorized = error { return .unauthorized }
+        return .failure(describeError(error))
+    }
+
+    private func mapPushFailure(_ error: JoplinCloudApi.SyncApiError) -> PushOutcome {
+        if case .unauthorized = error { return .unauthorized }
+        return .failure(describeError(error))
     }
 
     private static let changeTypeDelete = 3

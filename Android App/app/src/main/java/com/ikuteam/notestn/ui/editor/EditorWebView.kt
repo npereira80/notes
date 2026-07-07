@@ -5,10 +5,14 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.view.ViewGroup
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.ikuteam.notestn.BuildConfig
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
@@ -48,6 +52,11 @@ fun EditorWebView(
                 )
                 .build()
 
+            // Debug builds only: lets chrome://inspect attach, and forwards JS console
+            // errors (e.g. an uncaught exception in the Enter/paragraph-split keymap)
+            // to Logcat instead of them vanishing silently inside the WebView.
+            if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+
             WebView(ctx).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -56,6 +65,14 @@ fun EditorWebView(
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 setBackgroundColor(Color.TRANSPARENT)
+                if (BuildConfig.DEBUG) {
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                            Log.d("EditorJS", "${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+                            return true
+                        }
+                    }
+                }
 
                 // Belt-and-suspenders for any native WebView chrome (e.g. scrollbars);
                 // the actual page theming below no longer depends on this.

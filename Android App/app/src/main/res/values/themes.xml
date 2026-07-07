@@ -5,11 +5,11 @@
          the WebView editor's text cursor/selection handles (Compose's MaterialTheme
          primary color, already yellow, has no effect on WebView-hosted content). -->
     <style name="Theme.NotesTN" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:colorAccent">@color/notes_yellow</item>
+        <item name="android:colorAccent">@color/notes_yellow_vivid</item>
         <!-- WebView's Chromium-drawn selection handles read colorControlActivated
              directly, not colorAccent — set both explicitly rather than relying
              on the framework's colorAccent -> colorControlActivated cascade. -->
-        <item name="android:colorControlActivated">@color/notes_yellow</item>
+        <item name="android:colorControlActivated">@color/notes_yellow_vivid</item>
         <!-- TEST: colorAccent/colorControlActivated alone didn't change the WebView
              handle color (known Chromium limitation — see conversation). Trying a
              direct drawable override instead, which supplies an already-yellow

@@ -23,7 +23,7 @@ enum MarkdownToHtml {
     private static let hrRegex = try! NSRegularExpression(pattern: "^([-*_])(\\s*\\1){2,}\\s*$")
 
     static func convert(_ markdown: String) -> String {
-        let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        let lines = stripFrontmatter(markdown.replacingOccurrences(of: "\r\n", with: "\n")).components(separatedBy: "\n")
         var html = ""
 
         var i = 0
@@ -121,6 +121,22 @@ enum MarkdownToHtml {
         return html.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Strips a leading YAML frontmatter block (e.g. from notes imported from other
+    /// apps/exports) — a "---" line, some metadata lines, then a closing "---" line —
+    /// which would otherwise render as a literal paragraph of "date: ..." text at the
+    /// top of the note. Only touches text that actually opens AND closes with "---";
+    /// leaves everything alone otherwise, to avoid eating real content on a false
+    /// positive (e.g. a note that legitimately starts with a horizontal rule).
+    private static func stripFrontmatter(_ markdown: String) -> String {
+        var lines = markdown.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return markdown }
+        guard let closingIndex = lines.dropFirst().firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "---"
+        }) else { return markdown }
+        lines.removeSubrange(0...closingIndex)
+        return lines.joined(separator: "\n")
+    }
+
     /// Inline formatting within a line/paragraph: images, links, bold, italic, code.
     private static func inline(_ text: String) -> String {
         var result = escapeHtml(text)
@@ -154,16 +170,27 @@ enum MarkdownToHtml {
         return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
+    // Some Joplin clients (and browser-based Markdown editors) write a raw inline
+    // "<br>" tag into the Markdown source for a line break within a paragraph —
+    // valid Markdown (raw inline HTML passes through untouched), which every
+    // Joplin client renders as an actual break. Our escapeHtml below escapes ALL
+    // "<"/">" unconditionally though, so without this it turns into literal
+    // "&lt;br&gt;" and shows up on screen as the text "<br>" instead of breaking
+    // the line — this regex restores it to a real (unescaped) <br> afterward, which
+    // the editor's `hard_break` schema node (parseDOM: [{ tag: 'br' }]) understands.
+    private static let brRegex = try! NSRegularExpression(pattern: "&lt;br\\s*/?&gt;", options: [.caseInsensitive])
+
     private static func escapeHtml(_ text: String) -> String {
         // Some Joplin clients write a literal "&nbsp;" entity into the Markdown source
         // to preserve an otherwise-empty line (a plain blank line would just be a
         // paragraph separator). Decode it to a plain space *before* escaping "&",
         // otherwise it becomes "&amp;nbsp;" and shows up as literal "&nbsp;" text
         // instead of rendering as blank space.
-        text.replacingOccurrences(of: "&nbsp;", with: " ")
+        let escaped = text.replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+        return replaceAll(brRegex, escaped) { _ in "<br>" }
     }
 
     // MARK: - NSRegularExpression helpers

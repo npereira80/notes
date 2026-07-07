@@ -397,6 +397,18 @@ class DatabaseManager private constructor(context: Context) :
         writableDatabase.delete("pending_deletes", "id = ?", arrayOf(id))
     }
 
+    /**
+     * True if [id] is queued for a remote delete that hasn't been pushed yet — used by
+     * pull's upsert functions to avoid resurrecting an item we've already permanently
+     * deleted locally but haven't told the server about (pull runs before push, so the
+     * server still has its old copy at that point).
+     */
+    fun hasPendingDelete(id: String): Boolean {
+        readableDatabase.rawQuery("SELECT 1 FROM pending_deletes WHERE id = ? LIMIT 1", arrayOf(id)).use { c ->
+            return c.moveToNext()
+        }
+    }
+
     fun searchNotes(query: String): List<Note> {
         val notes = mutableListOf<Note>()
         val pattern = "%$query%"

@@ -12,22 +12,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 // App-wide accent, matching Mac/NotesTN/NotesTN/Assets.xcassets/AccentColor.colorset
-// (#FFD60A) — SwiftUI's accentColor cascades through the whole app, so primary and
+// (#EAB744) — SwiftUI's accentColor cascades through the whole app, so primary and
 // primaryContainer are both set here to get the same effect (FAB, active toolbar
-// icons, selection indicators, etc.) on Android.
+// icons, active text fields, etc.) on Android.
 private val DarkColorScheme = darkColorScheme(
-    primary = NotesYellow,
+    primary = NotesYellowDark,
     onPrimary = Color.Black,
-    primaryContainer = NotesYellow,
+    primaryContainer = NotesYellowDark,
     onPrimaryContainer = Color.Black,
     secondary = PurpleGrey80,
     tertiary = Pink80
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = NotesYellow,
+    primary = NotesYellowDark,
     onPrimary = Color.Black,
-    primaryContainer = NotesYellow,
+    primaryContainer = NotesYellowDark,
     onPrimaryContainer = Color.Black,
     secondary = PurpleGrey40,
     tertiary = Pink40

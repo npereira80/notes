@@ -1,12 +1,19 @@
 package com.ikuteam.notestn.viewmodel
 
 import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Folder
 import com.ikuteam.notestn.data.Note
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.ikuteam.notestn.data.joplin.JoplinAccountStore
+import com.ikuteam.notestn.data.joplin.JoplinCloudApi
 import com.ikuteam.notestn.data.joplin.JoplinSyncEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +58,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isTrashSelected = MutableStateFlow(false)
     val isTrashSelected: StateFlow<Boolean> = _isTrashSelected.asStateFlow()
+
+    // True while the ProseMirror editor's contentEditable region has keyboard
+    // focus (vs. the note list) — drives the selected note row's Gray (editor
+    // focused) vs. Dimmed yellow (list focused) background in tablet/two-pane
+    // mode. See EditorScreen.kt's onFocusChanged. Plain Compose state (not
+    // StateFlow) since it's only read by composables and never needs a
+    // cold-start replay value.
+    var isEditorFocused by mutableStateOf(false)
 
     // null = "All Notes". Restored synchronously here (not in the async init{} block
     // below) so NotesNavHost can read the last-open notebook via .value before its
@@ -102,6 +117,18 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 if (account != null) syncNow()
             }
         }
+
+        // Joplin Cloud sessions are fixed at 12 hours with no renewal (see
+        // SessionModel.ts server-side) — re-checking when the app comes back to the
+        // foreground gives a session that died while backgrounded a chance to be
+        // silently replaced (see runSync's Unauthorized handling) before the user
+        // notices. ProcessLifecycleOwner fires ON_START at the app level (any Activity
+        // resuming from background), not per-Activity onResume.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                syncNow()
+            }
+        })
     }
 
     // MARK: - Joplin Cloud sync (pull + push, see JoplinSyncEngine)
@@ -121,15 +148,41 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isSyncing.value = true
             _syncError.value = null
-            when (val outcome = syncEngine.sync(force)) {
-                is JoplinSyncEngine.SyncOutcome.Success -> loadAll()
-                is JoplinSyncEngine.SyncOutcome.Failure -> _syncError.value = outcome.message
-            }
+            runSync(force = force, allowRelogin = true)
             _isSyncing.value = false
             if (syncRerunRequested) {
                 syncRerunRequested = false
                 syncNow()
             }
+        }
+    }
+
+    /** Split out from syncNow so an Unauthorized outcome can trigger one silent
+     * re-login + retry (allowRelogin guards against looping if the fresh session is
+     * somehow also rejected — e.g. the password changed server-side since we last saved
+     * it). Joplin Cloud sessions are fixed at 12 hours with no renewal, so this is the
+     * only way to recover without asking the user to type their password in again. */
+    private suspend fun runSync(force: Boolean, allowRelogin: Boolean) {
+        when (val outcome = syncEngine.sync(force)) {
+            is JoplinSyncEngine.SyncOutcome.Success -> loadAll()
+            is JoplinSyncEngine.SyncOutcome.Unauthorized -> {
+                val account = JoplinAccountStore.shared.account.value
+                if (!allowRelogin || account == null) {
+                    _syncError.value = "Joplin Cloud session expired — please log in again."
+                    return
+                }
+                JoplinCloudApi.login(account.email, account.password)
+                    .onSuccess { session ->
+                        JoplinAccountStore.shared.save(
+                            account.copy(sessionId = session.id, userId = session.userId)
+                        )
+                        runSync(force = force, allowRelogin = false)
+                    }
+                    .onFailure {
+                        _syncError.value = "Joplin Cloud session expired — please log in again."
+                    }
+            }
+            is JoplinSyncEngine.SyncOutcome.Failure -> _syncError.value = outcome.message
         }
     }
 

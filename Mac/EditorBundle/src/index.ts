@@ -42,12 +42,13 @@ interface SelectionState {
 }
 
 interface NativeMessage {
-  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl';
+  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'focusChanged';
   title?: string;
   html?: string;
   selectionState?: SelectionState;
   message?: string;
   url?: string;
+  focused?: boolean;
 }
 
 // ── Swift bridge ──────────────────────────────────────────────────────────────
@@ -559,6 +560,14 @@ function createEditor(): EditorView {
     editable: () => !isReadOnly,
   });
 
+  // Android-only signal: lets the two-pane tablet layout (note list + editor
+  // visible side by side, no persistent sidebar — see NotesNavHost.kt) switch
+  // the selected note row between Dimmed Yellow (list has focus) and Gray
+  // (editor has focus). Mac doesn't need this — its equivalent distinction is
+  // driven by sidebar focus instead (see SidebarView.swift's isSidebarFocused).
+  view.dom.addEventListener('focus', () => postToNative({ type: 'focusChanged', focused: true }));
+  view.dom.addEventListener('blur', () => postToNative({ type: 'focusChanged', focused: false }));
+
   // Initial selection state
   notifySelection(view.state);
 
@@ -603,22 +612,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const bridge: NativeEditorBridge = {
     setContent(title: string, body: string) {
-      // Build the title node directly from the raw string (a plain text node,
-      // no HTML involved) rather than splicing it into an HTML string — sidesteps
-      // any HTML-escaping concerns for title text like "&" or "<".
-      const titleNode = schema.nodes.title.create(null, title ? schema.text(title) : undefined);
-
-      // parseSlice (not parse) — it doesn't require its result to independently
-      // satisfy doc's own content expression, so the body's blocks can be
-      // extracted as a plain Fragment and combined with titleNode below.
-      const parser = PMDOMParser.fromSchema(schema);
+      // Splice the title in as a real `div.pm-title` DOM node (title's own
+      // parseDOM tag) ahead of the body, then run the *full* parser.parse()
+      // over the combined DOM with `doc` as the top node. Unlike parseSlice +
+      // doc.create() (previous approach — produced structurally invalid docs
+      // that later crashed with "contentMatchAt on a node with invalid
+      // content") or doc.createAndFill() (tried, reverted — it repairs
+      // mismatches by deleting whatever doesn't fit, which silently wiped an
+      // entire note body), parser.parse() builds the document incrementally
+      // against doc's own content expression ('title block*'), auto-wrapping
+      // stray content in the correct block type as it goes — the same
+      // context-aware matching used while typing — so it can't produce an
+      // invalid document and doesn't drop valid content to do it.
       const domParser = new DOMParser();
       const dom = domParser.parseFromString(body || '<p></p>', 'text/html');
-      const bodySlice = parser.parseSlice(dom.body, { preserveWhitespace: true });
 
-      const content = bodySlice.content.addToStart(titleNode);
+      const titleDiv = dom.createElement('div');
+      titleDiv.className = 'pm-title';
+      if (title) titleDiv.textContent = title;
+      dom.body.insertBefore(titleDiv, dom.body.firstChild);
+
+      const parser = PMDOMParser.fromSchema(schema);
+      const doc = parser.parse(dom.body, { preserveWhitespace: true });
+
       const newState = EditorState.create({
-        doc: schema.nodes.doc.create(null, content),
+        doc,
         plugins: view.state.plugins,
       });
       view.updateState(newState);

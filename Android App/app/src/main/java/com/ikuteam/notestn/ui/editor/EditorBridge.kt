@@ -29,4 +29,5 @@ data class EditorBridgeMessage(
     val selectionState: EditorSelectionState? = null,
     val message: String? = null,
     val url: String? = null,
+    val focused: Boolean? = null,
 )

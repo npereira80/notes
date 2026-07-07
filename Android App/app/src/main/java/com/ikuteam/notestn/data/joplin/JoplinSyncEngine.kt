@@ -36,6 +36,9 @@ class JoplinSyncEngine(context: Context) {
             val foldersPushed: Int = 0,
             val resourcesPushed: Int = 0,
         ) : SyncOutcome()
+        // Distinct from Failure so the caller can attempt a silent re-login and retry,
+        // instead of just surfacing an error message.
+        data object Unauthorized : SyncOutcome()
         data class Failure(val message: String) : SyncOutcome()
     }
 
@@ -65,7 +68,7 @@ class JoplinSyncEngine(context: Context) {
             val allChanges = mutableListOf<JoplinCloudApi.DeltaChange>()
             while (true) {
                 val delta = JoplinCloudApi.delta(account.sessionId, pageCursor).getOrElse { error ->
-                    return@withContext SyncOutcome.Failure(describeError(error))
+                    return@withContext mapFailure(error)
                 }
                 allChanges.addAll(delta.items)
                 if (!delta.has_more) {
@@ -93,7 +96,7 @@ class JoplinSyncEngine(context: Context) {
                 }
 
                 val content = JoplinCloudApi.itemContent(account.sessionId, itemName).getOrElse { error ->
-                    return@withContext SyncOutcome.Failure(describeError(error))
+                    return@withContext mapFailure(error)
                 }
                 parsedItems.add(JoplinItemParser.parse(content))
             }
@@ -111,6 +114,7 @@ class JoplinSyncEngine(context: Context) {
             }
 
             when (val pushResult = push(account.sessionId)) {
+                is PushOutcome.Unauthorized -> SyncOutcome.Unauthorized
                 is PushOutcome.Failure -> SyncOutcome.Failure(pushResult.message)
                 is PushOutcome.Success -> SyncOutcome.Success(
                     notesUpdated = notesUpdated,
@@ -127,6 +131,7 @@ class JoplinSyncEngine(context: Context) {
 
     private sealed class PushOutcome {
         data class Success(val notesPushed: Int, val foldersPushed: Int, val resourcesPushed: Int) : PushOutcome()
+        data object Unauthorized : PushOutcome()
         data class Failure(val message: String) : PushOutcome()
     }
 
@@ -139,7 +144,7 @@ class JoplinSyncEngine(context: Context) {
     private suspend fun push(sessionId: String): PushOutcome {
         for ((id, itemType) in db.fetchPendingDeletes()) {
             JoplinCloudApi.deleteItem(sessionId, "$id.md").getOrElse { error ->
-                return PushOutcome.Failure(describeError(error))
+                return mapPushFailure(error)
             }
             // A resource is two separate remote files — its `{id}.md` metadata (just
             // deleted above) and its binary blob at `.resource/{id}` — both need removing.
@@ -155,11 +160,11 @@ class JoplinSyncEngine(context: Context) {
         for (resource in db.fetchDirtyResources()) {
             val metadata = JoplinItemSerializer.serialize(resource).toByteArray(Charsets.UTF_8)
             JoplinCloudApi.putItemContent(sessionId, "${resource.id}.md", metadata).getOrElse { error ->
-                return PushOutcome.Failure(describeError(error))
+                return mapPushFailure(error)
             }
             val bytes = File(db.resourcesDirectory, resource.filename).readBytes()
             JoplinCloudApi.putResourceBlob(sessionId, resource.id, bytes).getOrElse { error ->
-                return PushOutcome.Failure(describeError(error))
+                return mapPushFailure(error)
             }
             db.markResourceSynced(resource.id)
             resourcesPushed++
@@ -169,7 +174,7 @@ class JoplinSyncEngine(context: Context) {
         for (note in db.fetchDirtyNotes()) {
             val content = JoplinItemSerializer.serialize(note).toByteArray(Charsets.UTF_8)
             JoplinCloudApi.putItemContent(sessionId, "${note.id}.md", content).getOrElse { error ->
-                return PushOutcome.Failure(describeError(error))
+                return mapPushFailure(error)
             }
             db.markNoteSynced(note.id)
             notesPushed++
@@ -179,7 +184,7 @@ class JoplinSyncEngine(context: Context) {
         for (folder in db.fetchDirtyFolders()) {
             val content = JoplinItemSerializer.serialize(folder).toByteArray(Charsets.UTF_8)
             JoplinCloudApi.putItemContent(sessionId, "${folder.id}.md", content).getOrElse { error ->
-                return PushOutcome.Failure(describeError(error))
+                return mapPushFailure(error)
             }
             db.markFolderSynced(folder.id)
             foldersPushed++
@@ -190,6 +195,10 @@ class JoplinSyncEngine(context: Context) {
 
     private fun upsertNote(parsed: JoplinItemParser.ParsedItem, force: Boolean): Boolean {
         val id = parsed.props["id"] ?: return false
+        // Already permanently deleted locally, pending a push to remove it from the
+        // server too — pull runs before push, so the server's still-current copy would
+        // otherwise resurrect it here just before push tells the server to delete it.
+        if (db.hasPendingDelete(id)) return false
         val remoteUpdatedTime = JoplinItemParser.parseTime(parsed.props["updated_time"])
         val localUpdatedTime = db.noteUpdatedTime(id)
         if (!force && localUpdatedTime != null && localUpdatedTime >= remoteUpdatedTime) return false
@@ -219,6 +228,8 @@ class JoplinSyncEngine(context: Context) {
 
     private fun upsertFolder(parsed: JoplinItemParser.ParsedItem, force: Boolean): Boolean {
         val id = parsed.props["id"] ?: return false
+        // See the matching comment in upsertNote — same resurrection risk.
+        if (db.hasPendingDelete(id)) return false
         val remoteUpdatedTime = JoplinItemParser.parseTime(parsed.props["updated_time"])
         val localUpdatedTime = db.folderUpdatedTime(id)
         if (!force && localUpdatedTime != null && localUpdatedTime >= remoteUpdatedTime) return false
@@ -263,6 +274,8 @@ class JoplinSyncEngine(context: Context) {
      * appassets.androidplatform.net/resources/ asset loader can serve it unchanged. */
     private suspend fun upsertResource(parsed: JoplinItemParser.ParsedItem, sessionId: String, force: Boolean) {
         val id = parsed.props["id"] ?: return
+        // See the matching comment in upsertNote — same resurrection risk.
+        if (db.hasPendingDelete(id)) return
         if (!force && db.resourceExists(id)) return
 
         val mime = parsed.props["mime"].orEmpty()
@@ -305,6 +318,14 @@ class JoplinSyncEngine(context: Context) {
         is JoplinCloudApi.SyncApiError.Network -> "Couldn't reach Joplin Cloud. Check your connection."
         else -> error.message ?: "Sync failed."
     }
+
+    private fun mapFailure(error: Throwable): SyncOutcome =
+        if (error is JoplinCloudApi.SyncApiError.Unauthorized) SyncOutcome.Unauthorized
+        else SyncOutcome.Failure(describeError(error))
+
+    private fun mapPushFailure(error: Throwable): PushOutcome =
+        if (error is JoplinCloudApi.SyncApiError.Unauthorized) PushOutcome.Unauthorized
+        else PushOutcome.Failure(describeError(error))
 
     companion object {
         private const val KEY_CURSOR = "delta_cursor"

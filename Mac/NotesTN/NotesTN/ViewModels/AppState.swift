@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Combine
 
 @MainActor
@@ -13,6 +14,12 @@ final class AppState: ObservableObject {
     @Published var isTrashSelected: Bool = false
     @Published var selectedFolderID: String? = nil     // nil = "All Notes"
     @Published var selectedNoteID: String? = nil
+    // True while the sidebar (notebooks list) has keyboard focus, vs. the note
+    // list or the editor. Drives both the sidebar's selected-row color (Vivid
+    // when focused, gray+dark-yellow text when not) and the note list's
+    // selected-row color (gray when the sidebar is focused, Dimmed otherwise).
+    // See SidebarView.swift's `.focused($isSidebarFocused)`.
+    @Published var isSidebarFocused: Bool = false
     @Published var searchText: String = ""
     @Published var isFocusingSearch: Bool = false
     @Published var isShowingJoplinLogin: Bool = false
@@ -31,6 +38,8 @@ final class AppState: ObservableObject {
 
     private let db = DatabaseManager.shared
     private let selectedNoteKey = "lastSelectedNoteID"
+    private let selectedFolderKey = "lastSelectedFolderID"
+    private let isTrashSelectedKey = "lastIsTrashSelected"
     private let syncEngine = JoplinSyncEngine()
     private var cancellables = Set<AnyCancellable>()
 
@@ -38,6 +47,7 @@ final class AppState: ObservableObject {
 
     init() {
         loadAll()
+        restoreFolderSelection()
         restoreSelection()
         purgeExpiredTrash()
         loadAll()
@@ -50,6 +60,14 @@ final class AppState: ObservableObject {
             .sink { [weak self] account in
                 if account != nil { self?.syncNow() }
             }
+            .store(in: &cancellables)
+
+        // Joplin Cloud sessions are fixed at 12 hours with no renewal (see
+        // SessionModel.ts server-side) — re-checking on resume gives a session that
+        // died while the app was backgrounded a chance to be silently replaced (see
+        // syncNow's .unauthorized handling) before the user notices.
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.syncNow() }
             .store(in: &cancellables)
     }
 
@@ -74,18 +92,44 @@ final class AppState: ObservableObject {
         isSyncing = true
         syncError = nil
         Task {
-            let outcome = await syncEngine.sync(sessionId: account.sessionId, force: force)
-            switch outcome {
-            case .success:
-                loadAll()
-            case .failure(let message):
-                syncError = message
-            }
+            await runSync(account: account, force: force, allowRelogin: true)
             isSyncing = false
             if syncRerunRequested {
                 syncRerunRequested = false
                 syncNow()
             }
+        }
+    }
+
+    /// Split out from syncNow so a `.unauthorized` outcome can trigger one silent
+    /// re-login + retry (allowRelogin guards against looping if the fresh session is
+    /// somehow also rejected — e.g. the password changed server-side since we last saved
+    /// it). Joplin Cloud sessions are fixed at 12 hours with no renewal, so this is the
+    /// only way to recover without asking the user to type their password in again.
+    private func runSync(account: JoplinAccount, force: Bool, allowRelogin: Bool) async {
+        switch await syncEngine.sync(sessionId: account.sessionId, force: force) {
+        case .success:
+            loadAll()
+        case .unauthorized:
+            guard allowRelogin else {
+                syncError = "Joplin Cloud session expired — please log in again."
+                return
+            }
+            switch await JoplinCloudApi.login(email: account.email, password: account.password) {
+            case .success(let result):
+                let refreshed = JoplinAccount(
+                    email: account.email,
+                    sessionId: result.sessionId,
+                    userId: result.userId,
+                    password: account.password
+                )
+                JoplinAccountStore.shared.save(refreshed)
+                await runSync(account: refreshed, force: force, allowRelogin: false)
+            case .failure:
+                syncError = "Joplin Cloud session expired — please log in again."
+            }
+        case .failure(let message):
+            syncError = message
         }
     }
 
@@ -107,15 +151,34 @@ final class AppState: ObservableObject {
         }
     }
 
+    // Restores the previously selected notebook/All Notes/Trash, so the app always
+    // reopens on whatever view was active when it last quit. Called before
+    // restoreSelection() so `notes`/`trashedNotes` are already scoped to the
+    // restored folder by the time a note gets restored within it.
+    private func restoreFolderSelection() {
+        if UserDefaults.standard.bool(forKey: isTrashSelectedKey) {
+            isTrashSelected = true
+        } else if let saved = UserDefaults.standard.string(forKey: selectedFolderKey),
+                  folders.contains(where: { $0.id == saved }) {
+            selectedFolderID = saved
+        }
+        loadNotes()
+    }
+
     // Restores the previously selected note, falling back to the first note.
     // Only called once at launch — subsequent loadNotes() calls leave selection intact.
+    // Reads from trashedNotes instead of notes when restoreFolderSelection() (called
+    // just before this) restored Trash as the active view, otherwise this could pick
+    // a note from the wrong list and leave the note list/editor showing mismatched
+    // content on launch.
     private func restoreSelection() {
-        guard !notes.isEmpty else { return }
+        let candidates = isTrashSelected ? trashedNotes : notes
+        guard !candidates.isEmpty else { return }
         let saved = UserDefaults.standard.string(forKey: selectedNoteKey)
-        if let saved, notes.contains(where: { $0.id == saved }) {
+        if let saved, candidates.contains(where: { $0.id == saved }) {
             selectedNoteID = saved
         } else {
-            selectedNoteID = notes.first?.id
+            selectedNoteID = candidates.first?.id
         }
     }
 
@@ -142,6 +205,10 @@ final class AppState: ObservableObject {
         isTrashSelected = false
         selectedFolderID = folder?.id
         selectedNoteID = nil
+        // Persisted so the app reopens on this notebook/All Notes next launch —
+        // see restoreFolderSelection().
+        UserDefaults.standard.set(folder?.id, forKey: selectedFolderKey)
+        UserDefaults.standard.set(false, forKey: isTrashSelectedKey)
         loadNotes()
     }
 
@@ -151,6 +218,8 @@ final class AppState: ObservableObject {
         // tag), so it's already been set correctly by the time this runs.
         isTrashSelected = true
         selectedNoteID = nil
+        // Persisted so the app reopens in Trash next launch — see restoreFolderSelection().
+        UserDefaults.standard.set(true, forKey: isTrashSelectedKey)
     }
 
     func createFolder(title: String = "New Notebook") {
@@ -413,11 +482,6 @@ final class AppState: ObservableObject {
 
     func search(_ query: String) {
         searchText = query
-        loadNotes()
-    }
-
-    func clearSearch() {
-        searchText = ""
         loadNotes()
     }
 }

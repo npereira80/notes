@@ -51,6 +51,19 @@ data class Note(
     val firstImageResourceId: String?
         get() {
             val imgTag = Regex("<img\\b[^>]*>").find(body)?.value ?: return null
-            return Regex("""data-resource-id="([^"]*)"""").find(imgTag)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+
+            // Locally-inserted/pasted images carry this explicitly (see EditorScreen's
+            // image-insert path → EditorBridge → the ProseMirror image node's
+            // data-resource-id attribute).
+            Regex("""data-resource-id="([^"]*)"""").find(imgTag)?.groupValues?.get(1)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+
+            // Images pulled from Joplin Cloud never get that attribute — MarkdownToHtml
+            // and JoplinSyncEngine's rewriteResourceLinks both just rewrite `src` to a
+            // local WebView URL, no data-resource-id. Every resource is saved locally
+            // as "<resourceId>.<ext>" (see DatabaseManager.saveResource), so recover the
+            // id from the src path's last component instead of requiring the attribute.
+            return Regex("""src="[^"]*/([0-9a-fA-F]{32})\.[A-Za-z0-9]+"""").find(imgTag)?.groupValues?.get(1)
         }
 }

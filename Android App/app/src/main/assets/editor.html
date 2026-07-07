@@ -23,13 +23,14 @@
     --color-text: #000;
     --color-bg: #fff;
     --color-secondary: #666;
-    --color-selection: rgba(0, 120, 255, 0.2);
+    --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-blockquote: #999;
-    /* Same brand yellow as the note-list selection / caret, not mode-dependent —
-       matches caret-color below. */
-    --color-highlight: #FFD60A;
-    --color-link: #c9901a;
+    /* Text-select yellow — same value in light/dark, see AppColors.swift /
+       ui/theme/Color.kt for the full 4-shade brand palette. */
+    --color-highlight: #faebc3;
+    --color-link: #deaa33;
+    --color-hr: rgba(0, 0, 0, 0.2);
   }
 
   @media (prefers-color-scheme: dark) {
@@ -37,10 +38,11 @@
       --color-text: #f0f0f0;
       --color-bg: #1e1e1e;
       --color-secondary: #aaa;
-      --color-selection: rgba(80, 160, 255, 0.3);
+      --color-selection: #faebc3;
       --color-code-bg: rgba(255, 255, 255, 0.08);
       --color-blockquote: #777;
-      --color-link: #fbbf24;
+      --color-link: #deaa33;
+      --color-hr: rgba(255, 255, 255, 0.3);
     }
   }
 
@@ -55,20 +57,20 @@
     --color-text: #f0f0f0;
     --color-bg: #1e1e1e;
     --color-secondary: #aaa;
-    --color-selection: rgba(80, 160, 255, 0.3);
+    --color-selection: #faebc3;
     --color-code-bg: rgba(255, 255, 255, 0.08);
     --color-blockquote: #777;
-    --color-link: #fbbf24;
+    --color-link: #deaa33;
     --color-hr: rgba(255, 255, 255, 0.3);
   }
   :root[data-theme="light"] {
     --color-text: #000;
     --color-bg: #fff;
     --color-secondary: #666;
-    --color-selection: rgba(0, 120, 255, 0.2);
+    --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-blockquote: #999;
-    --color-link: #c9901a;
+    --color-link: #deaa33;
     --color-hr: rgba(0, 0, 0, 0.2);
   }
 
@@ -118,9 +120,9 @@
   .ProseMirror {
     outline: none;
     min-height: inherit;
-    /* Matches the native title field's cursor (MaterialTheme primary / NotesYellow
+    /* Matches the native title field's cursor (MaterialTheme primary / NotesYellowDark
        on Android, AccentColor on Mac) instead of the browser-engine default black. */
-    caret-color: #FFD60A;
+    caret-color: #deaa33;
   }
 
   .ProseMirror > * + * { margin-top: 0.75em; }

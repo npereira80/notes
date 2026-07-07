@@ -56,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -150,6 +151,13 @@ fun EditorScreen(
                 context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
             }
         }
+        coordinator.onFocusChanged = { focused ->
+            viewModel.isEditorFocused = focused
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { viewModel.isEditorFocused = false }
     }
 
     // Push initial content once the WebView bundle signals it's ready.
