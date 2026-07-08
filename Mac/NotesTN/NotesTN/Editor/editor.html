@@ -32,6 +32,12 @@
     --color-highlight-text: #b04ac5;
     --color-link: #deaa33;
     --color-hr: rgba(0, 0, 0, 0.2);
+    /* Task list checkbox — darkYellow (brand color, same as --color-link) for the
+       checked state instead of the browser's default system-accent blue, plus an
+       explicit border so the unchecked box isn't left in native-control chrome
+       (which doesn't follow the page's own light/dark theme). */
+    --color-checkbox-border: rgba(0, 0, 0, 0.35);
+    --color-checkbox-checked-bg: #deaa33;
     /* Mac only — set imperatively via EditorWebView.swift's setTopInset (mirrors
        Android's data-theme trick above) whenever the WKWebView is resized to
        flow underneath the native window toolbar's translucent material, so
@@ -51,6 +57,8 @@
       --color-blockquote: #777;
       --color-link: #deaa33;
       --color-hr: rgba(255, 255, 255, 0.3);
+      --color-checkbox-border: rgba(255, 255, 255, 0.4);
+      --color-checkbox-checked-bg: #deaa33;
     }
   }
 
@@ -70,6 +78,8 @@
     --color-blockquote: #777;
     --color-link: #deaa33;
     --color-hr: rgba(255, 255, 255, 0.3);
+    --color-checkbox-border: rgba(255, 255, 255, 0.4);
+    --color-checkbox-checked-bg: #deaa33;
   }
   :root[data-theme="light"] {
     --color-text: #000;
@@ -80,6 +90,8 @@
     --color-blockquote: #999;
     --color-link: #deaa33;
     --color-hr: rgba(0, 0, 0, 0.2);
+    --color-checkbox-border: rgba(0, 0, 0, 0.35);
+    --color-checkbox-checked-bg: #deaa33;
   }
 
   html {
@@ -223,11 +235,36 @@
     gap: 6px;
   }
   .ProseMirror ul[data-is-checklist] li input[type="checkbox"] {
-    margin-top: 3px;
     flex-shrink: 0;
     cursor: pointer;
     width: 15px;
     height: 15px;
+    /* appearance: none — a bare native checkbox otherwise ignores border/background
+       color entirely and renders the OS's own control chrome (a light-mode-looking
+       white box, system-accent blue when checked), which is why it didn't follow
+       the page's light/dark theme or the app's brand color before. */
+    appearance: none;
+    -webkit-appearance: none;
+    /* 6px = original 3px + 3px more, per request, to align with the text baseline
+       instead of sitting too high. */
+    margin: 6px 0 0 0;
+    border: 1.5px solid var(--color-checkbox-border);
+    border-radius: 4px;
+    background: transparent;
+  }
+  .ProseMirror ul[data-is-checklist] li input[type="checkbox"]:checked {
+    background: var(--color-checkbox-checked-bg);
+    border-color: var(--color-checkbox-checked-bg);
+  }
+  .ProseMirror ul[data-is-checklist] li input[type="checkbox"]:checked::before {
+    content: "";
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+    clip-path: polygon(
+      41% 61%, 22% 44%, 15% 51%, 41% 76%, 85% 30%, 78% 23%
+    );
   }
   .ProseMirror ul[data-is-checklist] li.checked > div {
     text-decoration: line-through;

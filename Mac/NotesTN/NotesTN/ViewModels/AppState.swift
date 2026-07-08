@@ -489,8 +489,32 @@ final class AppState: ObservableObject {
 
     // MARK: - Search
 
+    // While typing: just re-filters the results list, nothing auto-opens. Preview
+    // of the first result only happens on submitSearch() (Enter key) — see below.
     func search(_ query: String) {
         searchText = query
         loadNotes()
+    }
+
+    // Called when the search field is submitted (Enter key) — opens the first
+    // result in the detail/editor view. Mac + iPad only, per request — iPhone
+    // keeps today's behavior (results list updates, nothing auto-opens).
+    // iPhone's compact single-column layout means the note list itself IS the
+    // screen while searching; auto-pushing to the editor there would yank the
+    // user away from the results they're scanning, which doesn't apply on
+    // Mac/iPad's multi-column layouts.
+    func submitSearch() {
+        #if os(macOS)
+        autoSelectFirstSearchResult()
+        #elseif os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            autoSelectFirstSearchResult()
+        }
+        #endif
+    }
+
+    private func autoSelectFirstSearchResult() {
+        guard !searchText.isEmpty else { return }
+        selectedNoteID = notes.first?.id
     }
 }

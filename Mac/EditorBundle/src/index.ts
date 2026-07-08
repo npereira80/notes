@@ -21,7 +21,7 @@ import { tableEditing, columnResizing } from 'prosemirror-tables';
 import { inputRules, wrappingInputRule, textblockTypeInputRule, smartQuotes, emDash, ellipsis, InputRule } from 'prosemirror-inputrules';
 
 import schema from './schema';
-import { commands, toggleCheckbox } from './commands';
+import { commands, toggleCheckboxAtPos } from './commands';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -557,7 +557,13 @@ function createEditor(): EditorView {
               const target = event.target as HTMLElement;
               if (target.tagName === 'INPUT' && target.getAttribute('type') === 'checkbox') {
                 event.preventDefault();
-                toggleCheckbox(view);
+                // Resolve the position from the actual clicked checkbox (not
+                // view.state.selection, which is still wherever the cursor was left
+                // from a previous click/edit at this point — preventDefault() above
+                // stops the browser from moving it to here first). Fixes checking one
+                // line toggling a different (or no) line.
+                const pos = view.posAtDOM(target, 0);
+                toggleCheckboxAtPos(view, pos);
                 return true;
               }
               return false;

@@ -84,6 +84,11 @@ private func rowDate(_ note: Note) -> String {
 
 struct PadNoteListView: View {
     @EnvironmentObject var appState: AppState
+    // Passed down from PadContentView (read above NavigationSplitView there) rather
+    // than read locally via @Environment here — this column's own width is narrow
+    // even when all 3 columns are visible on a full-size iPad, so a local read
+    // always reported .compact regardless of the actual window size.
+    var windowSizeClass: UserInterfaceSizeClass?
 
     private var displayedNotes: [Note] {
         appState.isTrashSelected ? appState.trashedNotes : appState.notes
@@ -230,6 +235,29 @@ struct PadNoteListView: View {
     }
 
     var body: some View {
+        if windowSizeClass == .compact {
+            list
+                // Only when the split view has collapsed to a single visible column
+                // (Split View / Slide Over, or a portrait compact-width iPad) — in
+                // that mode the editor column (which normally hosts search) isn't
+                // reachable while browsing the list, so this is the only place a
+                // search field can live.
+                .searchable(
+                    text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
+                    placement: .toolbar,
+                    prompt: "Search"
+                )
+                // Enter key — opens/previews the first result. Typing alone (the
+                // binding above) only re-filters the list now.
+                .onSubmit(of: .search) {
+                    appState.submitSearch()
+                }
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
         List(selection: selection) {
             // Note count — a subtitle under the current notebook's nav title, not a
             // real row, so no separators above/below it and not selectable/tappable
@@ -282,6 +310,23 @@ struct PadNoteListView: View {
                     Image(systemName: "square.and.pencil")
                 }
             }
+        }
+        // Pull-to-refresh — a normal incremental sync (force: false), not a full
+        // resync. syncNow(force: true) resets the delta cursor and re-pulls/
+        // overwrites everything from scratch (same heavy operation as the "Force
+        // Resync" menu item) — too much for a quick pull-to-refresh, which should
+        // just check for and apply whatever changed since the last sync.
+        // syncNow(force:) is fire-and-forget, so this just polls isSyncing to know
+        // when to end the pull-to-refresh spinner.
+        .refreshable {
+            await checkForUpdates()
+        }
+    }
+
+    private func checkForUpdates() async {
+        appState.syncNow()
+        while appState.isSyncing {
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
 }

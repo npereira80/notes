@@ -175,6 +175,11 @@ struct NoteListView: View {
                 placement: noteListSearchPlacement,
                 prompt: "Search"
             )
+            // Enter key — opens/previews the first result. Typing alone (the
+            // binding above) only re-filters the list now.
+            .onSubmit(of: .search) {
+                appState.submitSearch()
+            }
             .searchFieldFocused($isSearchFieldFocused)
             .toolbar { noteListToolbarContent }
             .confirmationDialog(

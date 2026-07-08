@@ -612,6 +612,10 @@ struct NoteEditorView: View {
 struct EditorToolbarView: View {
     @ObservedObject var coordinator: EditorCoordinator
     var onInsertImage: () -> Void
+    // Defaults to true so existing call sites (iPhone floating toolbar, iPad's prior
+    // embedded row) keep undo/redo unchanged — PadEditorView.swift passes false to
+    // omit them from its bar specifically.
+    var showsUndoRedo: Bool = true
     @State private var isShowingLinkInput = false
     @State private var linkText = ""
 
@@ -718,15 +722,18 @@ struct EditorToolbarView: View {
 
             Divider().frame(height: 20)
 
-            // Undo/redo — no longer pushed to the trailing edge with a Spacer() now
-            // that this toolbar scrolls horizontally (see NoteEditorView): a Spacer()
-            // inside a horizontal ScrollView tries to expand to fill the proposed
-            // (effectively infinite) scroll width instead of just the visible width.
-            FormatButton(icon: "arrow.uturn.backward") {
-                coordinator.execCommand("undo")
-            }
-            FormatButton(icon: "arrow.uturn.forward") {
-                coordinator.execCommand("redo")
+            if showsUndoRedo {
+                // Undo/redo — no longer pushed to the trailing edge with a Spacer()
+                // now that this toolbar scrolls horizontally (see NoteEditorView): a
+                // Spacer() inside a horizontal ScrollView tries to expand to fill the
+                // proposed (effectively infinite) scroll width instead of just the
+                // visible width.
+                FormatButton(icon: "arrow.uturn.backward") {
+                    coordinator.execCommand("undo")
+                }
+                FormatButton(icon: "arrow.uturn.forward") {
+                    coordinator.execCommand("redo")
+                }
             }
         }
         .contentShape(Rectangle())  // entire toolbar row is event-opaque; gaps between buttons don't fall through

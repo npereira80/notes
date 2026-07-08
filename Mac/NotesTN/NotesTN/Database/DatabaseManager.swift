@@ -1,13 +1,24 @@
 import Foundation
 import SQLite3
 
-/// Synchronous SQLite wrapper. Called exclusively from @MainActor (AppState),
-/// so no additional locking is needed for Phase 1.
+/// Synchronous SQLite wrapper.
 /// Schema mirrors Joplin's exactly so sync can be layered on later.
+///
+/// NOTE: despite the old comment this used to have, this is NOT called
+/// exclusively from @MainActor — JoplinSyncEngine is a Swift `actor`, so its
+/// calls into here run on its own executor/thread, concurrently with any
+/// @MainActor UI code (e.g. a sidebar note count) also calling in. That
+/// mismatch caused real sqlite3 mutex-misuse crashes. `lock` below serializes
+/// every actual sqlite3 call through the two low-level primitives
+/// (exec/withStatement) that every other method in this file routes through —
+/// an NSRecursiveLock (not a plain DispatchQueue.sync) specifically so a
+/// method that calls another DatabaseManager method internally on the same
+/// thread can't deadlock against itself.
 final class DatabaseManager {
     static let shared = DatabaseManager()
 
     private var db: OpaquePointer?
+    private let lock = NSRecursiveLock()
 
     private init() {
         openDatabase()
@@ -626,6 +637,8 @@ final class DatabaseManager {
     // MARK: - SQLite helpers
 
     private func exec(_ sql: String) {
+        lock.lock()
+        defer { lock.unlock() }
         var error: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, sql, nil, nil, &error) != SQLITE_OK {
             if let e = error { print("[DB] exec error: \(String(cString: e))") }
@@ -633,6 +646,8 @@ final class DatabaseManager {
     }
 
     private func withStatement(_ sql: String, block: (OpaquePointer) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
             print("[DB] prepare error for: \(sql)")

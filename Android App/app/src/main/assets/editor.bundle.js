@@ -15176,6 +15176,22 @@
     }
     return false;
   };
+  var toggleCheckboxAtPos = (view, pos) => {
+    const { state, dispatch } = view;
+    const $pos = state.doc.resolve(pos);
+    for (let d = $pos.depth; d >= 0; d--) {
+      const node = $pos.node(d);
+      if (node.type === schema_default.nodes.task_list_item) {
+        if (dispatch) {
+          const nodePos = $pos.before(d);
+          const checked = !node.attrs.checked;
+          dispatch(state.tr.setNodeMarkup(nodePos, void 0, { ...node.attrs, checked }));
+        }
+        return true;
+      }
+    }
+    return false;
+  };
   var indentList = (view) => {
     const { state, dispatch } = view;
     return sinkListItem(schema_default.nodes.task_list_item)(state, dispatch) || sinkListItem(schema_default.nodes.list_item)(state, dispatch);
@@ -15639,7 +15655,8 @@
                 const target = event.target;
                 if (target.tagName === "INPUT" && target.getAttribute("type") === "checkbox") {
                   event.preventDefault();
-                  toggleCheckbox(view2);
+                  const pos = view2.posAtDOM(target, 0);
+                  toggleCheckboxAtPos(view2, pos);
                   return true;
                 }
                 return false;
