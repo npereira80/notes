@@ -336,7 +336,7 @@ struct NoteEditorView: View {
                         onInsertImage: { isShowingImagePicker = true }
                     )
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
+                    .padding(.vertical, 13.75)
                 }
                 .background(Color(.systemBackground))
             }
@@ -437,8 +437,8 @@ struct NoteEditorView: View {
                 coordinator: editorCoordinator,
                 onInsertImage: { isShowingImagePicker = true }
             )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 10)
         }
         .background(Color(.systemBackground), in: shape)
         .overlay(shape.stroke(Color.primary.opacity(0.15), lineWidth: 0.5))
@@ -572,12 +572,12 @@ struct EditorToolbarView: View {
                 Button("Code Block") { coordinator.execCommand("codeBlock") }
             } label: {
                 Image(systemName: "textformat")
-                    .frame(width: 26, height: 22)
+                    .frame(width: 32.5, height: 27.5)
                     .contentShape(Rectangle())
             }
-            .frame(width: 36)
+            .frame(width: 45)
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Task list + Insert Image — moved up front (2nd/3rd items), per request
             FormatToggleButton(icon: "checklist", isActive: coordinator.selectionState.inTaskList) {
@@ -587,7 +587,7 @@ struct EditorToolbarView: View {
                 onInsertImage()
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Inline marks
             FormatToggleButton(icon: "bold", isActive: coordinator.selectionState.bold) {
@@ -606,14 +606,14 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("code")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Block formatting
             FormatToggleButton(icon: "quote.opening", isActive: coordinator.selectionState.inBlockquote) {
                 coordinator.execCommand("blockquote")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Indent / outdent
             FormatButton(icon: "decrease.indent") {
@@ -623,7 +623,7 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("indent")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Insert (image moved above; table/HR remain)
             FormatButton(icon: "tablecells") {
@@ -633,7 +633,7 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("horizontalRule")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Link
             FormatToggleButton(icon: "link", isActive: coordinator.selectionState.hasLink) {
@@ -645,7 +645,7 @@ struct EditorToolbarView: View {
                 }
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Undo/redo — no longer pushed to the trailing edge with a Spacer() now
             // that this toolbar scrolls horizontally (see NoteEditorView): a Spacer()
@@ -687,8 +687,8 @@ struct FormatButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .frame(width: 26, height: 22)
+                .font(.system(size: 15))
+                .frame(width: 32.5, height: 27.5)
                 .contentShape(Rectangle())  // full frame is tappable, not just icon pixels
         }
         .foregroundStyle(.secondary)
@@ -703,8 +703,8 @@ struct FormatToggleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .frame(width: 26, height: 22)
+                .font(.system(size: 15))
+                .frame(width: 32.5, height: 27.5)
                 .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
                 .cornerRadius(4)
                 .contentShape(Rectangle())  // full frame is tappable

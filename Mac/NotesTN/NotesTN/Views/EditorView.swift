@@ -323,7 +323,7 @@ struct NoteEditorView: View {
                     onInsertImage: { isShowingImagePicker = true }
                 )
                 .padding(.horizontal, 16)
-                .padding(.vertical, 11)
+                .padding(.vertical, 13.75)
                 .background(.windowBackground)
             }
 
@@ -495,13 +495,13 @@ struct EditorToolbarView: View {
                 Button("Code Block") { coordinator.execCommand("codeBlock") }
             } label: {
                 Image(systemName: "textformat")
-                    .frame(width: 26, height: 22)
+                    .frame(width: 32.5, height: 27.5)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 36)
+            .frame(width: 45)
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Task list + Insert Image — moved up front (2nd/3rd items), per request
             FormatToggleButton(icon: "checklist", tooltip: "Task List", isActive: coordinator.selectionState.inTaskList) {
@@ -511,7 +511,7 @@ struct EditorToolbarView: View {
                 onInsertImage()
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Inline marks
             FormatToggleButton(icon: "bold", tooltip: "Bold (⌘B)", isActive: coordinator.selectionState.bold) {
@@ -530,14 +530,14 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("code")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Block formatting
             FormatToggleButton(icon: "quote.opening", tooltip: "Blockquote", isActive: coordinator.selectionState.inBlockquote) {
                 coordinator.execCommand("blockquote")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Indent / outdent
             FormatButton(icon: "decrease.indent", tooltip: "Outdent (⇧Tab)") {
@@ -547,7 +547,7 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("indent")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Insert (image moved above; table/HR remain)
             FormatButton(icon: "tablecells", tooltip: "Insert Table") {
@@ -557,7 +557,7 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("horizontalRule")
             }
 
-            Divider().frame(height: 16)
+            Divider().frame(height: 20)
 
             // Link
             FormatToggleButton(icon: "link", tooltip: "Insert Link", isActive: coordinator.selectionState.hasLink) {
@@ -567,16 +567,6 @@ struct EditorToolbarView: View {
                     // TODO: show link input panel — for now use a simple prompt
                     showLinkInput()
                 }
-            }
-
-            Spacer()
-
-            // Undo/redo
-            FormatButton(icon: "arrow.uturn.backward", tooltip: "Undo (⌘Z)") {
-                coordinator.execCommand("undo")
-            }
-            FormatButton(icon: "arrow.uturn.forward", tooltip: "Redo (⌘⇧Z)") {
-                coordinator.execCommand("redo")
             }
         }
         .contentShape(Rectangle())  // entire toolbar row is event-opaque; gaps between buttons don't fall through
@@ -614,8 +604,8 @@ struct FormatButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .frame(width: 26, height: 22)
+                .font(.system(size: 15))
+                .frame(width: 32.5, height: 27.5)
                 .contentShape(Rectangle())  // full frame is clickable, not just icon pixels
         }
         .buttonStyle(.borderless)
@@ -633,8 +623,8 @@ struct FormatToggleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .frame(width: 26, height: 22)
+                .font(.system(size: 15))
+                .frame(width: 32.5, height: 27.5)
                 .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
                 .cornerRadius(4)
                 .contentShape(Rectangle())  // full frame is clickable
