@@ -22,21 +22,23 @@ struct PadEditorView: View {
                 PadNoteEditorView(note: note, readOnly: appState.isTrashSelected)
                     .id(note.id)
             } else {
+                // Only the emptyState branch needs its own copy of the search icon
+                // — PadNoteEditorView declares it itself (see below), right after
+                // its formatting toolbar in the same .toolbar closure, so the two
+                // stay in a guaranteed left-to-right order: (formatting toolbar)
+                // (search icon). Declaring them from two different views' .toolbar
+                // modifiers didn't reliably preserve that order.
                 emptyState
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            SearchIconButton(
+                                text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
+                                onSubmit: { appState.submitSearch() }
+                            )
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
             }
-        }
-        // System default search bar, same appState.searchText/search(_:) binding
-        // PadNoteListView's own .searchable uses — kept regardless of which branch
-        // above is showing, so it's always available in this column's toolbar.
-        .searchable(
-            text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
-            placement: .toolbar,
-            prompt: "Search"
-        )
-        // Enter key — opens/previews the first result. Typing alone (the binding
-        // above) only re-filters the list now.
-        .onSubmit(of: .search) {
-            appState.submitSearch()
         }
     }
 
@@ -105,6 +107,16 @@ private struct PadNoteEditorView: View {
                         )
                     }
                 }
+                // Declared after the formatting toolbar above, in the same .toolbar
+                // closure, so it's guaranteed to render to its right:
+                // (formatting toolbar) (search icon).
+                ToolbarItem(placement: .primaryAction) {
+                    SearchIconButton(
+                        text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
+                        onSubmit: { appState.submitSearch() }
+                    )
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
             .fileImporter(
                 isPresented: $isShowingImagePicker,
@@ -191,6 +203,53 @@ private struct EditorFormatToolbar: View {
 
     private var toolbar: some View {
         EditorToolbarView(coordinator: coordinator, onInsertImage: onInsertImage, showsUndoRedo: false)
+    }
+}
+
+// Fixed-width magnifying-glass icon — never grows inline in the toolbar itself, per
+// request. Tapping it opens a popover containing the actual search field; the note
+// list behind still updates live as you type (same appState.search(_:) binding
+// PadNoteListView reads from), and Enter still calls onSubmit (submitSearch()) to
+// open/preview the first result, same as before.
+private struct SearchIconButton: View {
+    @Binding var text: String
+    var onSubmit: () -> Void
+
+    @State private var isShowingPopover = false
+    @FocusState private var isFieldFocused: Bool
+
+    var body: some View {
+        Button {
+            isShowingPopover = true
+            isFieldFocused = true
+        } label: {
+            Image(systemName: "magnifyingglass")
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isShowingPopover) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search", text: $text)
+                    .focused($isFieldFocused)
+                    .submitLabel(.search)
+                    .onSubmit(onSubmit)
+                if !text.isEmpty {
+                    Button {
+                        text = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(10)
+            .frame(width: 260)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 }
 
