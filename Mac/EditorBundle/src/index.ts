@@ -30,6 +30,7 @@ interface SelectionState {
   italic: boolean;
   code: boolean;
   strikethrough: boolean;
+  highlight: boolean;
   inCode: boolean;       // cursor is inside code_block
   inBlockquote: boolean;
   inBulletList: boolean;
@@ -123,6 +124,42 @@ function isUrl(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Pasted rich HTML from webpages sometimes carries structural layout markup —
+// most commonly nested <table>s used for old-school box/grid layouts (e.g. a
+// shipment tracker widget) — that this schema can technically parse (tables
+// are a real node type, see schema.ts's tableNodes) but that some WebViews
+// (WKWebView on Mac/iOS) fail to lay out/render at all, leaving the rest of
+// the note blank. This flattens table structure into plain paragraphs (one
+// per cell) before the schema parses the paste, while leaving inline
+// formatting (bold/italic/links/lists/etc.) inside those cells untouched —
+// see transformPastedHTML below for where this hooks in.
+function stripPastedTables(html: string): string {
+  const dom = new DOMParser().parseFromString(html, 'text/html');
+
+  // Repeatedly unwrap the innermost tables (no <table> descendant of their
+  // own) so nested tables-within-tables are fully flattened, not just their
+  // outermost shell. The guard caps iterations against runaway/malformed
+  // input; real-world nesting is never anywhere near this deep.
+  let tables = Array.from(dom.body.querySelectorAll('table'));
+  let guard = 0;
+  while (tables.length > 0 && guard < 20) {
+    for (const table of tables) {
+      if (table.querySelector('table')) continue; // handle innermost first
+      const frag = dom.createDocumentFragment();
+      for (const cell of Array.from(table.querySelectorAll('td, th'))) {
+        const p = dom.createElement('p');
+        while (cell.firstChild) p.appendChild(cell.firstChild);
+        frag.appendChild(p);
+      }
+      table.replaceWith(frag);
+    }
+    tables = Array.from(dom.body.querySelectorAll('table'));
+    guard++;
+  }
+
+  return dom.body.innerHTML;
 }
 
 // ── Build editor keymap ────────────────────────────────────────────────────────
@@ -241,6 +278,7 @@ function getSelectionState(state: EditorState): SelectionState {
     italic: hasMark(m.em),
     code: hasMark(m.code),
     strikethrough: hasMark(m.strikethrough),
+    highlight: hasMark(m.highlight),
     inCode,
     inBlockquote,
     inBulletList,
@@ -286,6 +324,13 @@ function createEditor(): EditorView {
   // query param and the body.pm-android rule in build.mjs.
   const isAndroid = /[?&]platform=android(&|$)/.test(location.search);
   if (isAndroid) document.body.classList.add('pm-android');
+
+  // iPhone only — the body's 24/30px left/right padding (below) was sized for Mac's
+  // much wider window and left too large a gap on iPhone's narrow screen. See
+  // EditorView.swift's (iOS target) ?platform= query param and the body.pm-ios-phone
+  // rule in build.mjs. iPad keeps the default padding (its screen is wide enough).
+  const isIOSPhone = /[?&]platform=ios-phone(&|$)/.test(location.search);
+  if (isIOSPhone) document.body.classList.add('pm-ios-phone');
 
   let lastTitle = '';
   let lastHTML = '';
@@ -548,6 +593,18 @@ function createEditor(): EditorView {
               }
             }
             return false;
+          },
+        },
+      }),
+
+      // Flatten table-based layout structure out of pasted HTML — see
+      // stripPastedTables above. Only runs for the normal (non-image,
+      // non-bare-URL) rich-HTML paste path; the two handlePaste plugins above
+      // already fully take over image/URL pastes before this would apply.
+      new Plugin({
+        props: {
+          transformPastedHTML(html) {
+            return stripPastedTables(html);
           },
         },
       }),

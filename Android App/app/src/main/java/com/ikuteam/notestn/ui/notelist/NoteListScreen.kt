@@ -1,10 +1,13 @@
 package com.ikuteam.notestn.ui.notelist
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,8 +38,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,7 +49,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -60,17 +60,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
+import com.ikuteam.notestn.ui.common.BackdropBlurState
+import com.ikuteam.notestn.ui.common.backdropBlurBackground
+import com.ikuteam.notestn.ui.common.captureForBackdropBlur
+import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
 import com.ikuteam.notestn.ui.theme.CardBackgroundDark
 import com.ikuteam.notestn.ui.theme.CardBackgroundLight
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
@@ -175,6 +182,9 @@ fun NoteListScreen(
     val cardBackground = if (darkTheme) CardBackgroundDark else CardBackgroundLight
     val searchFieldBackground = if (darkTheme) SearchFieldBackgroundDark else SearchFieldBackgroundLight
     var confirmEmptyTrash by remember { mutableStateOf(false) }
+    // Backdrop blur source — the note list content scrolling behind the floating
+    // search bar / new note button (see BackdropBlurState above).
+    val blurState = rememberBackdropBlurState()
 
     val today = remember { LocalDate.now(zone) }
     val currentYear = today.year
@@ -231,13 +241,18 @@ fun NoteListScreen(
                 onClear = { viewModel.clearSearch() },
                 requestFocus = isFocusingSearch || focusSearchOnLaunch,
                 onFocusConsumed = { viewModel.consumeFocusSearch() },
-                onNewNote = { viewModel.createNote() },
+                // Routes through onNoteClick (not just viewModel.createNote()) so the
+                // new note opens immediately — on compact width that's the callback
+                // that also navigates to the editor destination (see NotesNavHost);
+                // on two-pane width it's already reactive and this is a no-op re-select.
+                onNewNote = { viewModel.createNote { note -> onNoteClick(note) } },
                 showAddButton = !isTrash,
                 fieldBackground = searchFieldBackground,
+                blurState = blurState,
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().captureForBackdropBlur(blurState)) {
             if (isSyncing) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
@@ -266,7 +281,7 @@ fun NoteListScreen(
                 modifier = Modifier.weight(1f),
             ) {
             if (notes.isEmpty()) {
-                EmptyState(isSearching = searchText.isNotEmpty(), onCreateNote = { viewModel.createNote() })
+                EmptyState(isSearching = searchText.isNotEmpty(), onCreateNote = { viewModel.createNote { note -> onNoteClick(note) } })
             } else if (searchText.isNotEmpty()) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -445,6 +460,9 @@ fun NoteListScreen(
     }
 }
 
+// Backdrop blur (search bar / new note button glass) now lives in
+// ui/common/BackdropBlur.kt, shared with EditorScreen's formatting toolbar.
+
 // MARK: - Floating search + add bar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -457,12 +475,13 @@ private fun FloatingSearchAndAddBar(
     onFocusConsumed: () -> Unit,
     onNewNote: () -> Unit,
     fieldBackground: Color,
+    blurState: BackdropBlurState,
     showAddButton: Boolean = true,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 24.dp)
             .navigationBarsPadding()
             .imePadding(),
         verticalAlignment = Alignment.CenterVertically,
@@ -475,23 +494,27 @@ private fun FloatingSearchAndAddBar(
             requestFocus = requestFocus,
             onFocusConsumed = onFocusConsumed,
             background = fieldBackground,
+            blurState = blurState,
             modifier = Modifier.weight(1f),
         )
         if (showAddButton) {
-            FloatingActionButton(
-                onClick = onNewNote,
-                shape = RoundedCornerShape(14.dp),
-                containerColor = NotesYellowVivid,
-                contentColor = Color.Black,
-                // Default FAB elevation (6dp/6dp/6dp/8dp), halved.
-                elevation = FloatingActionButtonDefaults.elevation(
-                    defaultElevation = 3.dp,
-                    pressedElevation = 3.dp,
-                    focusedElevation = 3.dp,
-                    hoveredElevation = 4.dp,
-                ),
+            val shape = RoundedCornerShape(16.dp)
+            // Custom Box instead of FloatingActionButton — FAB draws its own solid
+            // Surface internally with no hook to slot a blurred backdrop in behind it,
+            // so the glass look needs full control over the draw order (blur, then
+            // tint, then icon). "Most opaque" glass setting — see FloatingSearchField's
+            // same 0.82 tint alpha.
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .shadow(3.dp, shape)
+                    .clip(shape)
+                    .backdropBlurBackground(blurState)
+                    .background(NotesYellowVivid.copy(alpha = 0.80f))
+                    .clickable(onClick = onNewNote),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Default.Add, contentDescription = "New Note")
+                Icon(Icons.Default.Add, contentDescription = "New Note", tint = Color.Black)
             }
         }
     }
@@ -506,9 +529,11 @@ private fun FloatingSearchField(
     requestFocus: Boolean,
     onFocusConsumed: () -> Unit,
     background: Color,
+    blurState: BackdropBlurState,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
 
     LaunchedEffect(requestFocus) {
         if (requestFocus) {
@@ -520,35 +545,64 @@ private fun FloatingSearchField(
     // Same elevation/shape language as the FAB next to it, so the two read as one
     // floating control group. `modifier` already carries `weight(1f)` from the
     // caller's Row, so only height needs fixing here.
-    Surface(
-        modifier = modifier.height(56.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = background,
-        border = BorderStroke(0.5.dp, Color.Gray.copy(alpha = 0.5f)),
-        tonalElevation = 3.dp,
-        shadowElevation = 3.dp,
+    //
+    // Custom Box instead of Surface — Surface draws its own solid color fill with no
+    // hook to slot a blurred backdrop in underneath it, so the glass look needs full
+    // control over draw order (blur, then tint, then content). 0.80 tint alpha ==
+    // current glass opacity setting (still technically translucent/blurred, but
+    // substantially opaque rather than very see-through).
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier = modifier
+            .height(48.dp)
+            .shadow(3.dp, shape)
+            .clip(shape)
+            .backdropBlurBackground(blurState)
+            .background(background.copy(alpha = 0.80f))
+            .border(0.5.dp, NotesYellowVivid, shape),
     ) {
         Row(
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextField(
+            // The standard TextField enforces TextFieldDefaults.MinHeight (56dp) via
+            // padding baked into its internal decoration box, which can't be overridden
+            // through TextField's own parameters — with this field compressed to 48dp,
+            // that excess padding pushed the placeholder/text down and clipped it at the
+            // bottom (the earlier y-offset nudge just moved the already-clipped glyphs,
+            // it didn't remove the clipping). Building it from BasicTextField +
+            // TextFieldDefaults.DecorationBox instead exposes contentPadding directly, so
+            // it can be sized to actually fit this field's real height.
+            BasicTextField(
                 value = text,
                 onValueChange = onTextChange,
                 modifier = Modifier
                     .weight(1f)
                     .focusRequester(focusRequester),
-                placeholder = { Text("Search") },
                 singleLine = true,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                ),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            )
+                interactionSource = interactionSource,
+            ) { innerTextField ->
+                TextFieldDefaults.DecorationBox(
+                    value = text,
+                    innerTextField = innerTextField,
+                    enabled = true,
+                    singleLine = true,
+                    visualTransformation = VisualTransformation.None,
+                    interactionSource = interactionSource,
+                    placeholder = { Text("Search") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                )
+            }
             if (text.isNotEmpty()) {
                 IconButton(onClick = onClear) {
                     Icon(Icons.Default.Clear, contentDescription = "Clear search")

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Security
 
 struct JoplinAccount: Codable, Equatable {

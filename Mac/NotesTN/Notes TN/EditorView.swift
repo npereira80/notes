@@ -1,9 +1,19 @@
 import SwiftUI
 import WebKit
-import AppKit
+import UIKit
+import Combine
 import UniformTypeIdentifiers
 
-// MARK: - Selection State (mirrors JS SelectionState)
+// iOS/iPadOS port of Mac/NotesTN/NotesTN/Views/EditorView.swift — same shell structure
+// and the same ProseMirror editor.html/editor.bundle.js loaded into a WKWebView, just
+// wrapped in UIViewRepresentable instead of NSViewRepresentable, with UIKit equivalents
+// swapped in wherever the Mac file used AppKit. Kept as its own file (not shared with
+// the Mac target) since the two platforms' WKWebView wrapper and window/responder APIs
+// are different enough that a single shared implementation would be more conditional
+// compilation than shared code. Keep behavior in sync with the Mac file by hand when
+// editor features change.
+
+// MARK: - Selection State (mirrors JS SelectionState — identical to Mac's)
 
 struct EditorSelectionState {
     var bold = false
@@ -31,11 +41,9 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     @Published var selectionState = EditorSelectionState()
     @Published var isReady = false
 
-    // The webview — set by RichTextEditorView.makeNSView
+    // The webview — set by RichTextEditorView.makeUIView
     weak var webView: WKWebView?
 
-    // Called when the JS side sends us a message.
-    // WKScriptMessage is @MainActor in macOS 14 SDK; no nonisolated needed.
     func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
@@ -85,7 +93,7 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         case "openUrl":
             if let urlString = body["url"] as? String,
                let url = URL(string: urlString) {
-                NSWorkspace.shared.open(url)
+                UIApplication.shared.open(url)
             }
 
         case "log":
@@ -107,9 +115,6 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     func setContent(title: String, body: String) {
         guard let wv = webView else { return }
         // JSONEncoder handles bare String top-level values safely.
-        // NSJSONSerialization throws an ObjC NSException (not a Swift Error) for
-        // bare strings, which bypasses try? and corrupts SwiftUI's run loop state,
-        // freezing the entire UI after the first note is selected.
         guard let titleData = try? JSONEncoder().encode(title),
               let titleJSON = String(data: titleData, encoding: .utf8),
               let bodyData = try? JSONEncoder().encode(body),
@@ -129,17 +134,15 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
             js = "window.NativeEditor?.execCommand('\(command)')"
         }
 
-        // Return first-responder to the WKWebView BEFORE sending the JS command.
-        // Without this, macOS steals focus for the toolbar button that was clicked,
-        // and ProseMirror has no active selection when the command arrives.
-        wv.window?.makeFirstResponder(wv)
+        // iOS has no window-level first responder concept like AppKit's
+        // makeFirstResponder — each view manages its own responder status directly.
+        wv.becomeFirstResponder()
         wv.evaluateJavaScript(js)
     }
 
     func focus() {
         guard let wv = webView else { return }
-        // Move AppKit first-responder to the WKWebView, then focus ProseMirror.
-        wv.window?.makeFirstResponder(wv)
+        wv.becomeFirstResponder()
         wv.evaluateJavaScript("window.NativeEditor?.focus()")
     }
 
@@ -150,14 +153,11 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        // WebKit always calls navigation delegate methods on the main thread, so it's
-        // safe to assume isolation here — navigationAction's properties are main-actor
-        // isolated in the current SDK even though this delegate method itself isn't.
         MainActor.assumeIsolated {
             if navigationAction.navigationType == .linkActivated,
                let url = navigationAction.request.url {
                 decisionHandler(.cancel)
-                NSWorkspace.shared.open(url)
+                UIApplication.shared.open(url)
                 return
             }
             decisionHandler(.allow)
@@ -174,58 +174,62 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     }
 }
 
-// MARK: - WKWebView with strict hit-testing
+// MARK: - WKWebView UIViewRepresentable
 
-/// WKWebView's internal subviews (NSScrollView, input-delegate views, etc.) don't
-/// clip their hit-test areas to the WKWebView's own bounds. On macOS, this causes
-/// the editor to absorb mouse events that are physically outside its frame — including
-/// events on the SwiftUI toolbar above it and on the note-list column to the left.
-/// Overriding hitTest here ensures only points actually inside this view are handled.
-final class EditorWebView: WKWebView {
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        // `point` arrives in the superview's coordinate space, not our own — must
-        // convert before comparing against `bounds`, or this check is meaningless
-        // whenever our frame origin isn't (0, 0) in the superview (the normal case).
-        let localPoint = superview?.convert(point, to: self) ?? point
-        guard bounds.contains(localPoint) else { return nil }
-        return super.hitTest(point)
-    }
-}
-
-
-// MARK: - WKWebView NSViewRepresentable
-
-struct RichTextEditorView: NSViewRepresentable {
+struct RichTextEditorView: UIViewRepresentable {
     @ObservedObject var coordinator: EditorCoordinator
     var readOnly: Bool = false
 
-    func makeNSView(context: Context) -> EditorWebView {
+    func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(coordinator, name: "editorMessage")
 
-        let wv = EditorWebView(frame: .zero, configuration: config)
-        wv.setValue(false, forKey: "drawsBackground") // transparent — body bg handles color
+        let wv = WKWebView(frame: .zero, configuration: config)
+        // Transparent background — body bg handles color (AppKit's "drawsBackground"
+        // key-value trick doesn't apply on iOS; this is the UIKit equivalent).
+        wv.isOpaque = false
+        wv.backgroundColor = .clear
+        wv.scrollView.backgroundColor = .clear
         wv.navigationDelegate = coordinator
         coordinator.webView = wv
         #if DEBUG
-        // Lets Safari's Develop menu attach to this WKWebView (Develop > [device name] >
-        // NotesTN) for real console errors/breakpoints — debug builds only.
-        if #available(macOS 13.3, *) { wv.isInspectable = true }
+        // Lets Safari's Develop menu attach to this WKWebView for real console
+        // errors/breakpoints — debug builds only.
+        if #available(iOS 16.4, *) { wv.isInspectable = true }
         #endif
 
         // Load editor.html from the app bundle.
-        // allowingReadAccessTo must cover BOTH the bundle directory (editor.html,
-        // editor.bundle.js) AND ~/Library/Application Support/NotesTN/resources/
-        // (user image attachments). The home directory is the common ancestor for
-        // debug builds (bundle is under ~/Library/Developer/Xcode/DerivedData).
+        // allowingReadAccessTo must cover the directory editor.html AND editor.bundle.js
+        // both live in — unlike Mac, where the user's home directory really is a common
+        // ancestor of the app bundle (under ~/Library/Developer/... for debug builds)
+        // and Application Support, iOS keeps the app bundle and the app's data
+        // (Application Support, where user image attachments live) in two completely
+        // separate sandbox containers with no shared ancestor. Granting NSHomeDirectory()
+        // (the data container) here was wrong — it doesn't cover the bundle container at
+        // all, so editor.bundle.js's <script src="editor.bundle.js"> load was silently
+        // blocked by WebKit's sandbox (see Xcode console: "Ignoring request to load this
+        // main resource because it is outside the sandbox"), meaning the whole
+        // ProseMirror/contentEditable JS never actually ran — only the static HTML/CSS
+        // shell rendered, which is why nothing was focusable or typable.
+        // NOTE: this fixes loading editor.html/editor.bundle.js, but user-attached image
+        // resources (file:// URLs pointing into Application Support) are NOT under this
+        // root either, and will likely hit the same sandbox error — a follow-up needs a
+        // WKURLSchemeHandler to serve those from Swift instead of relying on file:// +
+        // allowingReadAccessTo, which can only grant one directory tree per web view.
         if let htmlURL = Bundle.main.url(forResource: "editor", withExtension: "html", subdirectory: nil) {
-            let accessRoot = FileManager.default.homeDirectoryForCurrentUser
+            let accessRoot = htmlURL.deletingLastPathComponent()
             // ?readonly=1 disables ProseMirror's contentEditable entirely for a trashed
-            // note opened from Trash — see EditorBundle/src/index.ts. Appended via
-            // URLComponents since htmlURL is a file:// URL (query strings are still
-            // valid there and WKWebView preserves them for location.search).
+            // note opened from Trash — see EditorBundle/src/index.ts.
             var components = URLComponents(url: htmlURL, resolvingAgainstBaseURL: false)
-            if readOnly { components?.queryItems = [URLQueryItem(name: "readonly", value: "1")] }
+            var queryItems: [URLQueryItem] = []
+            if readOnly { queryItems.append(URLQueryItem(name: "readonly", value: "1")) }
+            // Tells the shared editor CSS to use iPhone's narrower body padding (see
+            // build.mjs's body.pm-ios-phone rule) instead of the default sized for
+            // Mac's wider window. iPad keeps the default — only iPhone needs this.
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                queryItems.append(URLQueryItem(name: "platform", value: "ios-phone"))
+            }
+            if !queryItems.isEmpty { components?.queryItems = queryItems }
             wv.loadFileURL(components?.url ?? htmlURL, allowingReadAccessTo: accessRoot)
         } else {
             let fallback = "<html><body><p style='color:red'>editor.html not found in bundle</p></body></html>"
@@ -235,15 +239,15 @@ struct RichTextEditorView: NSViewRepresentable {
         return wv
     }
 
-    func updateNSView(_ nsView: EditorWebView, context: Context) {
+    func updateUIView(_ uiView: WKWebView, context: Context) {
         // State updates driven by coordinator callbacks — nothing needed here
     }
 
-    static func dismantleNSView(_ nsView: EditorWebView, coordinator: ()) {
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: ()) {
         // Remove the message handler to break the retain cycle:
         // WKUserContentController holds a strong ref to EditorCoordinator,
         // so we must remove it when the view is destroyed.
-        nsView.configuration.userContentController.removeScriptMessageHandler(forName: "editorMessage")
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "editorMessage")
     }
 }
 
@@ -271,11 +275,10 @@ struct EditorView: View {
             Text("Select or create a note")
                 .foregroundStyle(.secondary)
             Button("New Note") { appState.createNote() }
-                .keyboardShortcut("n", modifiers: .command)
                 .tint(Color.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.windowBackground)
+        .background(Color(.systemBackground))
     }
 }
 
@@ -291,6 +294,13 @@ struct NoteEditorView: View {
     private let initialTitle: String
     private let initialBody: String
     private let readOnly: Bool
+
+    // iPhone only (leave iPad/Mac/Android untouched) — the formatting toolbar floats
+    // as a rounded, horizontally-scrolling bar just above the keyboard (mirrors
+    // Android's EditorScreen.kt Surface-over-WebView approach) instead of sitting in
+    // a fixed row under the nav bar. iPad keeps the original embedded top toolbar.
+    private var isPhoneIdiom: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    @State private var keyboardHeight: CGFloat = 0
 
     init(note: Note, readOnly: Bool = false) {
         self.noteID = note.id
@@ -316,26 +326,60 @@ struct NoteEditorView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 11)
-                .background(.windowBackground)
-            } else {
-                EditorToolbarView(
-                    coordinator: editorCoordinator,
-                    onInsertImage: { isShowingImagePicker = true }
-                )
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
-                .background(.windowBackground)
+                .background(Color(.systemBackground))
+            } else if !isPhoneIdiom {
+                // iPad keeps the original embedded top toolbar row — iPhone's version
+                // floats above the keyboard instead (see the .overlay below).
+                ScrollView(.horizontal, showsIndicators: false) {
+                    EditorToolbarView(
+                        coordinator: editorCoordinator,
+                        onInsertImage: { isShowingImagePicker = true }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                }
+                .background(Color(.systemBackground))
             }
 
             Divider()
 
-            // Title now lives inside the shared ProseMirror doc (see
-            // Mac/EditorBundle's `pm-title` node), so it scrolls together with
-            // the body instead of sitting in a separate native field above it.
+            // Title lives inside the shared ProseMirror doc (see Mac/EditorBundle's
+            // `pm-title` node), so it scrolls together with the body.
+            // Left/right inset on iPhone comes from the shared editor.html/CSS itself
+            // (body.pm-ios-phone in build.mjs, activated via the ?platform=ios-phone
+            // query param above) rather than SwiftUI-level padding here — Mac keeps
+            // its own default CSS padding untouched.
             RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
+                .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(.windowBackground)
+        .background(Color(.systemBackground))
+        // iPhone-only floating formatting toolbar (see isPhoneIdiom above) — hidden
+        // whenever the keyboard isn't up, same as Android's imeVisible gate, since the
+        // toolbar is only useful while actively typing.
+        .overlay(alignment: .bottom) {
+            if isPhoneIdiom && !readOnly && keyboardHeight > 0 {
+                floatingToolbar
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard isPhoneIdiom,
+                  let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboardHeight = max(0, UIScreen.main.bounds.height - frame.origin.y)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardHeight = 0
+        }
+        .toolbar {
+            if !readOnly {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { appState.createNote() } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .foregroundStyle(Color.secondary)
+                }
+            }
+        }
         .confirmationDialog(
             "Permanently delete this note?",
             isPresented: $showPermanentDeleteConfirm,
@@ -353,7 +397,20 @@ struct NoteEditorView: View {
             setupCallbacks()
         }
         .onChange(of: editorCoordinator.isReady) { _, ready in
-            if ready { editorCoordinator.setContent(title: initialTitle, body: initialBody) }
+            guard ready else { return }
+            editorCoordinator.setContent(title: initialTitle, body: initialBody)
+            // Unlike Mac (where clicking anywhere hands keyboard focus to whatever
+            // NSView was clicked, via AppKit's default mouse-down handling), iOS has
+            // no equivalent automatic tap-to-focus for a UIViewRepresentable-wrapped
+            // WKWebView — especially a near-empty new note, whose title placeholder
+            // has little to no visible/tappable content yet. Focus explicitly here so
+            // notes (new or existing) are immediately editable without requiring the
+            // user to find the right pixel to tap first.
+            if !readOnly {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    editorCoordinator.focus()
+                }
+            }
         }
         // Image picker
         .fileImporter(
@@ -369,12 +426,30 @@ struct NoteEditorView: View {
         appState.trashedNotes.first { $0.id == noteID }
     }
 
+    // iPhone-only floating formatting toolbar — rounded card, horizontally scrolling,
+    // positioned just above the keyboard (keyboardHeight, tracked above). Mirrors
+    // Android's EditorScreen.kt Surface (14dp corner radius, hairline border, small
+    // shadow) floating over the WebView instead of reserving its own layout row.
+    private var floatingToolbar: some View {
+        let shape = RoundedRectangle(cornerRadius: 14)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            EditorToolbarView(
+                coordinator: editorCoordinator,
+                onInsertImage: { isShowingImagePicker = true }
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+        .background(Color(.systemBackground), in: shape)
+        .overlay(shape.stroke(Color.primary.opacity(0.15), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        .padding(.horizontal, 10)
+        .padding(.bottom, keyboardHeight + 5)
+    }
+
     // MARK: Setup
 
     private func setupCallbacks() {
-        // Title now arrives from the same combined callback as the body (see
-        // Mac/EditorBundle's `pm-title` node) — one save path instead of the old
-        // separate immediate-body-save / debounced-title-save paths.
         editorCoordinator.onContentChanged = { title, html in
             guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
             var updated = note
@@ -385,7 +460,6 @@ struct NoteEditorView: View {
         editorCoordinator.onImageRequested = { dataUri in
             guard let resource = copyDataUriIntoResources(dataUri: dataUri, noteId: noteID),
                   let dir = DatabaseManager.shared.resourcesDirectory else { return }
-            // file:// URL that WKWebView can load (local access granted via loadFileURL)
             editorCoordinator.insertImage(
                 src: dir.appendingPathComponent(resource.filename).absoluteString,
                 alt: resource.title,
@@ -398,6 +472,12 @@ struct NoteEditorView: View {
 
     private func handleImagePick(result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
+
+        // fileImporter on iOS hands back a security-scoped URL — must bracket the
+        // actual read with start/stopAccessingSecurityScopedResource, unlike macOS
+        // where sandbox access is already implied by the picker itself.
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer { if didStartAccessing { url.stopAccessingSecurityScopedResource() } }
 
         let resourceId = Note.generateId()
         guard let resourcesDir = DatabaseManager.shared.resourcesDirectory else { return }
@@ -412,7 +492,6 @@ struct NoteEditorView: View {
             return
         }
 
-        // Save to DB and insert into editor
         let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "image/png"
         // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
         // synced since the server doesn't know about it.
@@ -425,7 +504,6 @@ struct NoteEditorView: View {
             noteId: noteID
         ), dirty: true, synced: false)
 
-        // file:// URL that WKWebView can load (local access granted via loadFileURL)
         editorCoordinator.insertImage(
             src: destURL.absoluteString,
             alt: url.deletingPathExtension().lastPathComponent,
@@ -435,8 +513,7 @@ struct NoteEditorView: View {
 
     /// Counterpart to handleImagePick for the paste-from-clipboard path — the editor
     /// bundle hands us a raw "data:image/png;base64,..." URI (see the paste handler in
-    /// Mac/EditorBundle/src/index.ts) instead of a picked file URL, since there's no
-    /// system picker involved.
+    /// Mac/EditorBundle/src/index.ts) instead of a picked file URL.
     private func copyDataUriIntoResources(dataUri: String, noteId: String) -> Resource? {
         guard let commaIndex = dataUri.firstIndex(of: ","),
               let dir = DatabaseManager.shared.resourcesDirectory else { return nil }
@@ -464,8 +541,6 @@ struct NoteEditorView: View {
             fileSize: bytes.count,
             noteId: noteId
         )
-        // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
-        // synced since the server doesn't know about it.
         DatabaseManager.shared.saveResource(resource, dirty: true, synced: false)
         return resource
     }
@@ -476,6 +551,8 @@ struct NoteEditorView: View {
 struct EditorToolbarView: View {
     @ObservedObject var coordinator: EditorCoordinator
     var onInsertImage: () -> Void
+    @State private var isShowingLinkInput = false
+    @State private var linkText = ""
 
     var body: some View {
         HStack(spacing: 2) {
@@ -498,108 +575,105 @@ struct EditorToolbarView: View {
                     .frame(width: 26, height: 22)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
             .frame(width: 36)
 
             Divider().frame(height: 16)
 
             // Task list + Insert Image — moved up front (2nd/3rd items), per request
-            FormatToggleButton(icon: "checklist", tooltip: "Task List", isActive: coordinator.selectionState.inTaskList) {
+            FormatToggleButton(icon: "checklist", isActive: coordinator.selectionState.inTaskList) {
                 coordinator.execCommand("taskList")
             }
-            FormatButton(icon: "photo", tooltip: "Insert Image") {
+            FormatButton(icon: "photo") {
                 onInsertImage()
             }
 
             Divider().frame(height: 16)
 
             // Inline marks
-            FormatToggleButton(icon: "bold", tooltip: "Bold (⌘B)", isActive: coordinator.selectionState.bold) {
+            FormatToggleButton(icon: "bold", isActive: coordinator.selectionState.bold) {
                 coordinator.execCommand("bold")
             }
-            FormatToggleButton(icon: "italic", tooltip: "Italic (⌘I)", isActive: coordinator.selectionState.italic) {
+            FormatToggleButton(icon: "italic", isActive: coordinator.selectionState.italic) {
                 coordinator.execCommand("italic")
             }
-            FormatToggleButton(icon: "strikethrough", tooltip: "Strikethrough", isActive: coordinator.selectionState.strikethrough) {
+            FormatToggleButton(icon: "strikethrough", isActive: coordinator.selectionState.strikethrough) {
                 coordinator.execCommand("strikethrough")
             }
-            FormatToggleButton(icon: "highlighter", tooltip: "Highlight", isActive: coordinator.selectionState.highlight) {
+            FormatToggleButton(icon: "highlighter", isActive: coordinator.selectionState.highlight) {
                 coordinator.execCommand("highlight")
             }
-            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", tooltip: "Inline Code (⌘`)", isActive: coordinator.selectionState.code) {
+            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", isActive: coordinator.selectionState.code) {
                 coordinator.execCommand("code")
             }
 
             Divider().frame(height: 16)
 
             // Block formatting
-            FormatToggleButton(icon: "quote.opening", tooltip: "Blockquote", isActive: coordinator.selectionState.inBlockquote) {
+            FormatToggleButton(icon: "quote.opening", isActive: coordinator.selectionState.inBlockquote) {
                 coordinator.execCommand("blockquote")
             }
 
             Divider().frame(height: 16)
 
             // Indent / outdent
-            FormatButton(icon: "decrease.indent", tooltip: "Outdent (⇧Tab)") {
+            FormatButton(icon: "decrease.indent") {
                 coordinator.execCommand("outdent")
             }
-            FormatButton(icon: "increase.indent", tooltip: "Indent (Tab)") {
+            FormatButton(icon: "increase.indent") {
                 coordinator.execCommand("indent")
             }
 
             Divider().frame(height: 16)
 
             // Insert (image moved above; table/HR remain)
-            FormatButton(icon: "tablecells", tooltip: "Insert Table") {
+            FormatButton(icon: "tablecells") {
                 coordinator.execCommand("table", value: ["rows": 3, "cols": 3])
             }
-            FormatButton(icon: "minus", tooltip: "Horizontal Rule") {
+            FormatButton(icon: "minus") {
                 coordinator.execCommand("horizontalRule")
             }
 
             Divider().frame(height: 16)
 
             // Link
-            FormatToggleButton(icon: "link", tooltip: "Insert Link", isActive: coordinator.selectionState.hasLink) {
+            FormatToggleButton(icon: "link", isActive: coordinator.selectionState.hasLink) {
                 if coordinator.selectionState.hasLink {
                     coordinator.execCommand("link")  // removes link
                 } else {
-                    // TODO: show link input panel — for now use a simple prompt
-                    showLinkInput()
+                    linkText = ""
+                    isShowingLinkInput = true
                 }
             }
 
-            Spacer()
+            Divider().frame(height: 16)
 
-            // Undo/redo
-            FormatButton(icon: "arrow.uturn.backward", tooltip: "Undo (⌘Z)") {
+            // Undo/redo — no longer pushed to the trailing edge with a Spacer() now
+            // that this toolbar scrolls horizontally (see NoteEditorView): a Spacer()
+            // inside a horizontal ScrollView tries to expand to fill the proposed
+            // (effectively infinite) scroll width instead of just the visible width.
+            FormatButton(icon: "arrow.uturn.backward") {
                 coordinator.execCommand("undo")
             }
-            FormatButton(icon: "arrow.uturn.forward", tooltip: "Redo (⌘⇧Z)") {
+            FormatButton(icon: "arrow.uturn.forward") {
                 coordinator.execCommand("redo")
             }
         }
         .contentShape(Rectangle())  // entire toolbar row is event-opaque; gaps between buttons don't fall through
-    }
-
-    private func showLinkInput() {
-        // Simple NSAlert-based link input for now
-        let alert = NSAlert()
-        alert.messageText = "Insert Link"
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        input.placeholderString = "https://example.com"
-        alert.accessoryView = input
-
-        alert.window.initialFirstResponder = input
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            let href = input.stringValue.trimmingCharacters(in: .whitespaces)
-            if !href.isEmpty {
-                coordinator.execCommand("link", value: ["href": href])
+        // SwiftUI alert replacement for Mac's NSAlert + NSTextField accessory view —
+        // there's no UIKit/iOS equivalent of an alert with an embedded text field
+        // outside of SwiftUI's own .alert(_:isPresented:actions:) TextField support.
+        .alert("Insert Link", isPresented: $isShowingLinkInput) {
+            TextField("https://example.com", text: $linkText)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("OK") {
+                let href = linkText.trimmingCharacters(in: .whitespaces)
+                if !href.isEmpty {
+                    coordinator.execCommand("link", value: ["href": href])
+                }
             }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }
@@ -608,7 +682,6 @@ struct EditorToolbarView: View {
 
 struct FormatButton: View {
     let icon: String
-    let tooltip: String
     let action: () -> Void
 
     var body: some View {
@@ -616,17 +689,14 @@ struct FormatButton: View {
             Image(systemName: icon)
                 .font(.system(size: 12))
                 .frame(width: 26, height: 22)
-                .contentShape(Rectangle())  // full frame is clickable, not just icon pixels
+                .contentShape(Rectangle())  // full frame is tappable, not just icon pixels
         }
-        .buttonStyle(.borderless)
-        .help(tooltip)
         .foregroundStyle(.secondary)
     }
 }
 
 struct FormatToggleButton: View {
     let icon: String
-    let tooltip: String
     let isActive: Bool
     let action: () -> Void
 
@@ -637,10 +707,8 @@ struct FormatToggleButton: View {
                 .frame(width: 26, height: 22)
                 .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
                 .cornerRadius(4)
-                .contentShape(Rectangle())  // full frame is clickable
+                .contentShape(Rectangle())  // full frame is tappable
         }
-        .buttonStyle(.borderless)
-        .help(tooltip)
         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
     }
 }

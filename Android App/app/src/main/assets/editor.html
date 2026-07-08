@@ -26,9 +26,10 @@
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-blockquote: #999;
-    /* Text-select yellow — same value in light/dark, see AppColors.swift /
-       ui/theme/Color.kt for the full 4-shade brand palette. */
-    --color-highlight: #faebc3;
+    /* Joplin-style text highlight mark (<mark>) — matches Joplin's own light
+       purple highlight color, same value in light/dark. */
+    --color-highlight-bg: #f1e0f3;
+    --color-highlight-text: #b04ac5;
     --color-link: #deaa33;
     --color-hr: rgba(0, 0, 0, 0.2);
   }
@@ -89,10 +90,7 @@
     min-height: 100%;
     background: var(--color-bg);
     color: var(--color-text);
-    /* Left inset is 6px more than right so the heading chevron (which hangs
-       into this gutter at left: -22px) sits farther from the screen edge,
-       without shifting the arrow's offset relative to the heading text. */
-    padding: 0 24px 48px 30px;
+    padding: 0 24px 48px 24px;
     font-family: var(--font-body);
     font-size: 16px;
     line-height: 1.7;
@@ -109,6 +107,13 @@
        own, leaving the title right up against it — 10px (~10dp, this WebView
        uses width=device-width so CSS px map 1:1 to dp) of breathing room. */
     padding-top: 10px;
+  }
+
+  /* iPhone only (see index.ts's ?platform=ios-phone detection) — the default
+     0 24px 48px 30px is sized for Mac's much wider window; on iPhone's narrow
+     screen it left too large a gap from the edge. iPad keeps the default. */
+  body.pm-ios-phone {
+    padding: 0 12px 48px 24px;
   }
 
   /* ProseMirror container */
@@ -225,9 +230,7 @@
   /* Images */
   .ProseMirror img {
     max-width: 100%;
-    /* Matches the note list's own card/thumbnail corner radius (see
-       NoteListScreen.kt's RoundedCornerShape(14.dp) usages). */
-    border-radius: 14px;
+    border-radius: 8px;
     display: block;
   }
   .ProseMirror img.ProseMirror-selectednode {
@@ -250,7 +253,8 @@
 
   /* Highlight */
   .ProseMirror mark {
-    background: var(--color-highlight);
+    background: var(--color-highlight-bg);
+    color: var(--color-highlight-text);
     border-radius: 2px;
     padding: 0 2px;
   }

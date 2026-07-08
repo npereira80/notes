@@ -22,12 +22,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FormatIndentDecrease
 import androidx.compose.material.icons.filled.FormatIndentIncrease
@@ -50,7 +53,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -74,8 +76,12 @@ import androidx.compose.ui.window.PopupProperties
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
 import com.ikuteam.notestn.data.Resource
+import com.ikuteam.notestn.ui.common.backdropBlurBackground
+import com.ikuteam.notestn.ui.common.captureForBackdropBlur
+import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
+import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.viewmodel.NotesViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -107,9 +113,12 @@ fun EditorScreen(
     val coordinator = remember(note.id) { EditorCoordinator() }
     val darkTheme = isSystemInDarkTheme()
     val groupedBackground = if (darkTheme) GroupedBackgroundDark else GroupedBackgroundLight
-    // 50% black reads as a hairline divider on the light toolbar background; on the
-    // dark background the equivalent (i.e. visible the same way) is 50% white.
-    val toolbarBorderColor = if (darkTheme) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.5f)
+    // Same border color as the note list's search bar (NotesYellowVivid).
+    val toolbarBorderColor = NotesYellowVivid
+    // Same hand-rolled glass blur as the note list's search bar / new note button
+    // (see ui/common/BackdropBlur.kt) — the toolbar blurs the note content scrolling
+    // behind it instead of sitting on a flat, opaque background.
+    val blurState = rememberBackdropBlurState()
     // The formatting toolbar is only useful while typing — hide it once the
     // keyboard is dismissed instead of leaving it pinned to the bottom of the
     // screen taking up space.
@@ -224,7 +233,12 @@ fun EditorScreen(
                 // Title lives inside the WebView's shared ProseMirror doc now (see
                 // Mac/EditorBundle's `pm-title` node) so it scrolls together with the
                 // body instead of sitting in a separate native field above it.
-                EditorWebView(coordinator = coordinator, darkTheme = darkTheme, readOnly = readOnly, modifier = Modifier.fillMaxSize())
+                EditorWebView(
+                    coordinator = coordinator,
+                    darkTheme = darkTheme,
+                    readOnly = readOnly,
+                    modifier = Modifier.fillMaxSize().captureForBackdropBlur(blurState),
+                )
 
                 // A trashed note is read-only until restored — no formatting toolbar.
                 // Also hidden once the keyboard is dismissed (see imeVisible above).
@@ -236,19 +250,25 @@ fun EditorScreen(
                     // toolbar from the screen edges — together with the rounded shape
                     // this makes it read as a floating card over the note rather than an
                     // edge-to-edge bar.
-                    // 14dp matches the note list's own section/card corner radius
-                    // (see NoteListScreen.kt's RoundedCornerShape(14.dp) usages).
-                    val toolbarShape = RoundedCornerShape(14.dp)
-                    Surface(
+                    // 16dp matches the note list's search bar corner radius
+                    // (see NoteListScreen.kt's FloatingSearchField).
+                    // Custom Box instead of Surface — same reasoning as the note list's
+                    // search bar / new note button (see NoteListScreen.kt): Surface draws
+                    // its own solid color fill with no hook to slot a blurred backdrop in
+                    // underneath it, so the glass look needs full control over draw order
+                    // (blur, then tint, then content). 0.80 tint alpha matches the note
+                    // list's glass elements.
+                    val toolbarShape = RoundedCornerShape(16.dp)
+                    Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(horizontal = 10.dp)
                             .padding(bottom = imeHeightDp + 5.dp)
+                            .shadow(8.dp, toolbarShape)
+                            .clip(toolbarShape)
+                            .backdropBlurBackground(blurState)
+                            .background(groupedBackground.copy(alpha = 0.80f))
                             .border(0.5.dp, toolbarBorderColor, toolbarShape),
-                        shape = toolbarShape,
-                        color = groupedBackground,
-                        tonalElevation = 2.dp,
-                        shadowElevation = 8.dp,
                     ) {
                         EditorToolbar(
                             coordinator = coordinator,
@@ -380,23 +400,26 @@ private fun EditorToolbar(
         }
 
         ToolbarDivider()
+        // Task list + Insert Image — moved up front (2nd/3rd items), per request
+        ToolbarToggleButton(Icons.Filled.Checklist, "Task List", s.inTaskList) { coordinator.execCommand("taskList") }
+        ToolbarIconButton(Icons.Filled.Image, "Insert Image", onInsertImage)
+
+        ToolbarDivider()
         ToolbarToggleButton(Icons.Outlined.FormatBold, "Bold", s.bold) { coordinator.execCommand("bold") }
         ToolbarToggleButton(Icons.Outlined.FormatItalic, "Italic", s.italic) { coordinator.execCommand("italic") }
         ToolbarToggleButton(Icons.Filled.FormatStrikethrough, "Strikethrough", s.strikethrough) { coordinator.execCommand("strikethrough") }
+        ToolbarToggleButton(Icons.Filled.BorderColor, "Highlight", s.highlight) { coordinator.execCommand("highlight") }
         ToolbarToggleButton(Icons.Filled.Code, "Inline Code", s.code) { coordinator.execCommand("code") }
 
         ToolbarDivider()
         ToolbarToggleButton(Icons.Filled.FormatQuote, "Blockquote", s.inBlockquote) { coordinator.execCommand("blockquote") }
 
         ToolbarDivider()
-        ToolbarToggleButton(Icons.Filled.Checklist, "Task List", s.inTaskList) { coordinator.execCommand("taskList") }
-
-        ToolbarDivider()
         ToolbarIconButton(Icons.Filled.FormatIndentDecrease, "Outdent") { coordinator.execCommand("outdent") }
         ToolbarIconButton(Icons.Filled.FormatIndentIncrease, "Indent") { coordinator.execCommand("indent") }
 
         ToolbarDivider()
-        ToolbarIconButton(Icons.Filled.Image, "Insert Image", onInsertImage)
+        // Image moved above; table/HR remain
         ToolbarIconButton(Icons.Filled.TableChart, "Insert Table") {
             coordinator.execCommand("table", buildJsonObject { put("rows", 3); put("cols", 3) })
         }

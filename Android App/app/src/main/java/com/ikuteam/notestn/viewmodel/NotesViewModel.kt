@@ -336,7 +336,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString(selectedNoteKey, note?.id).apply()
     }
 
-    fun createNote() {
+    /**
+     * onCreated fires once the note is saved and selected — callers on compact-width
+     * screens use it to navigate straight into the editor (see NoteListScreen's
+     * onNewNote/EmptyState), instead of leaving the user to find the new note in the
+     * list and tap it. Two-pane (wide) callers can ignore it — the editor pane already
+     * shows the newly-selected note reactively.
+     */
+    fun createNote(onCreated: (Note) -> Unit = {}) {
         viewModelScope.launch {
             // Joplin has no "notebook-less note" concept — every real client always
             // resolves to a concrete folder id before saving. A note pushed with
@@ -352,6 +359,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             _selectedNoteId.value = note.id
             prefs.edit().putString(selectedNoteKey, note.id).apply()
             schedulePushDebounce()
+            onCreated(note)
         }
     }
 

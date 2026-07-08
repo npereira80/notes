@@ -464,6 +464,19 @@ class DatabaseManager private constructor(context: Context) :
         }
     }
 
+    /** Stored MIME type for a resource, looked up by filename rather than id — used by
+     * EditorWebView's request interceptor, which only has the filename from the
+     * WebView URL to go on. Reads the DB-recorded type (captured from the real content
+     * resolver / clipboard data URI at ingestion) rather than guessing from the file
+     * extension, since HEIC files can end up saved with a non-".heic" extension when
+     * MimeTypeMap doesn't recognize "image/heic" on a given Android version. */
+    fun resourceMimeTypeForFilename(filename: String): String? {
+        readableDatabase.rawQuery("SELECT mime FROM resources WHERE filename = ?", arrayOf(filename)).use { c ->
+            if (!c.moveToFirst()) return null
+            return c.getString(0)
+        }
+    }
+
     fun resourceExists(id: String): Boolean {
         readableDatabase.rawQuery("SELECT 1 FROM resources WHERE id = ?", arrayOf(id)).use { c ->
             return c.moveToFirst()

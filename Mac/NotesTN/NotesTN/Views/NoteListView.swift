@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 // Used to look up the note displayed right after a given one (for divider
 // hiding around the selected row — see noteRow's `nextNote` param) without an
@@ -23,6 +26,16 @@ private extension View {
         }
     }
 }
+
+// SearchFieldPlacement.toolbar only exists on macOS — iOS has no equivalent concept
+// (there's no separate toolbar search field), so it falls back to .automatic there.
+#if os(macOS)
+private let noteListSearchPlacement: SearchFieldPlacement = .toolbar
+#else
+private let noteListSearchPlacement: SearchFieldPlacement = .automatic
+#endif
+
+
 
 // MARK: - Selection colors
 // Brand yellow palette — see AppColors.swift for the full set shared with
@@ -116,6 +129,37 @@ struct NoteListView: View {
     @FocusState private var isSearchFieldFocused: Bool
     @State private var showEmptyTrashConfirm = false
 
+    // iPhone gets its own bottom search bar with a "New Note" button next to it
+    // (see phoneSearchBar) — Mac and iPad keep the native .searchable field as-is.
+    // Checked via UIDevice's idiom (not horizontalSizeClass) since the requirement
+    // is specifically "iPhone", not "any compact width" (e.g. iPad Split View).
+    #if os(iOS)
+    private var isPhoneIdiom: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    #else
+    private var isPhoneIdiom: Bool { false }
+    #endif
+    @FocusState private var isPhoneSearchFocused: Bool
+
+    // NavigationSplitView only auto-pushes from the note-list column to the editor
+    // column on iPhone's compact layout when that column is backed by a List with a
+    // selection: binding (same mechanism as SidebarView's sidebarSelectionIOS) — the
+    // plain ScrollView/LazyVStack used on Mac/iPad has no such binding, which is why
+    // tapping a note there never advanced to the editor. iPhone gets its own List-backed
+    // row rendering (see noteRowPhone/mainContent) driven by this binding; Mac/iPad's
+    // ScrollView rendering is untouched.
+    private var noteSelectionIOS: Binding<String?> {
+        Binding<String?>(
+            get: { appState.selectedNoteID },
+            set: { newValue in
+                guard let id = newValue, let note = displayedNotes.first(where: { $0.id == id }) else {
+                    appState.selectNote(nil)
+                    return
+                }
+                appState.selectNote(note)
+            }
+        )
+    }
+
     private var displayedNotes: [Note] {
         appState.isTrashSelected ? appState.trashedNotes : appState.notes
     }
@@ -146,15 +190,82 @@ struct NoteListView: View {
             .map { (group: $0.key, notes: $0.value) }
     }
 
+    // Shared toolbar content — factored out so it can be chained directly after
+    // .searchable in the non-phone branch below (see body). Modifier order/scoping
+    // relative to .searchable seemed to matter more than the placement value itself
+    // when experimenting with where this renders relative to the search field.
+    @ToolbarContentBuilder
+    private var noteListToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            if appState.isTrashSelected && (!appState.trashedNotes.isEmpty || !appState.trashedFolders.isEmpty) {
+                Button("Empty Trash", role: .destructive) { showEmptyTrashConfirm = true }
+            } else {
+                #if os(macOS)
+                // Moved here from EditorView.swift's NoteEditorView (Mac only —
+                // that file isn't part of the iOS target's build). Not shown
+                // while viewing Trash — notes can't be created there.
+                if !appState.isTrashSelected {
+                    Button { appState.createNote() } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .foregroundStyle(Color.secondary)
+                    .help("New Note (⌘N)")
+                }
+                #endif
+            }
+        }
+    }
+
     var body: some View {
+        Group {
+            if isPhoneIdiom {
+                mainContent
+                    .safeAreaInset(edge: .bottom) { phoneSearchBar }
+                    .toolbar { noteListToolbarContent }
+            } else {
+                mainContent
+                    .searchable(
+                        text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
+                        placement: noteListSearchPlacement,
+                        prompt: "Search"
+                    )
+                    .searchFieldFocused($isSearchFieldFocused)
+                    .toolbar { noteListToolbarContent }
+            }
+        }
+        .confirmationDialog(
+            "Permanently delete everything in Trash?",
+            isPresented: $showEmptyTrashConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Empty Trash", role: .destructive) { appState.emptyTrash() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
+        }
+        .navigationTitle(navigationTitle)
+        .onChange(of: appState.isFocusingSearch) { _, focused in
+            guard focused else { return }
+            if isPhoneIdiom { isPhoneSearchFocused = true } else { isSearchFieldFocused = true }
+            appState.isFocusingSearch = false
+        }
+    }
+
+    // The header/divider/note-list column, shared by both the phone and Mac/iPad
+    // layouts above — only how search + "New Note" are presented around it differs.
+    private var mainContent: some View {
         VStack(spacing: 0) {
 
             // MARK: Header — current notebook (or "All Notes") + its note count,
             // replacing the old in-content search bar now that search lives in the
-            // native toolbar search field (see .searchable below).
+            // native toolbar search field (see .searchable below). iPhone only: the
+            // title itself is skipped here — the nav bar already shows it (see
+            // .navigationTitle below), so this was a duplicate; only the count is kept.
             VStack(alignment: .leading, spacing: 2) {
-                Text(navigationTitle)
-                    .font(.system(size: 20, weight: .bold))
+                if !isPhoneIdiom {
+                    Text(navigationTitle)
+                        .font(.system(size: 20, weight: .bold))
+                }
                 Text("\(displayedNotes.count) note\(displayedNotes.count == 1 ? "" : "s")")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -169,6 +280,8 @@ struct NoteListView: View {
             // MARK: Note list
             if displayedNotes.isEmpty && !(appState.isTrashSelected && !appState.trashedFolders.isEmpty) {
                 emptyState
+            } else if isPhoneIdiom {
+                phoneNoteList
             } else if !appState.searchText.isEmpty {
                 // Flat list for search results
                 ScrollView {
@@ -180,6 +293,7 @@ struct NoteListView: View {
                     .padding(.vertical, 6)
                     .padding(.horizontal, 6)
                 }
+                .refreshable { await forceResync() }
             } else {
                 // Grouped list
                 ScrollView {
@@ -208,42 +322,133 @@ struct NoteListView: View {
                     .padding(.bottom, 6)
                     .padding(.horizontal, 6)
                 }
+                .refreshable { await forceResync() }
             }
         }
         // Outer +8pt left/right inset around the entire note list column (header,
         // divider, section headers, rows) — on top of whatever horizontal padding each
-        // child already has internally, which is untouched.
-        .padding(.horizontal, 8)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if appState.isTrashSelected && (!appState.trashedNotes.isEmpty || !appState.trashedFolders.isEmpty) {
-                    Button("Empty Trash", role: .destructive) { showEmptyTrashConfirm = true }
-                } else {
-                    // Placeholder keeps the toolbar column divider visible.
-                    Color.clear.frame(width: 1, height: 22)
+        // child already has internally, which is untouched. iPhone only: skipped, so
+        // the insetGrouped list's own gray grouped background can extend to both
+        // screen edges (the individual cards below still keep their own inset).
+        .padding(.horizontal, isPhoneIdiom ? 0 : 8)
+    }
+
+    // Pull-to-refresh (mainly for iOS/iPadOS, which has no Cmd+R menu command — see
+    // NotesTNApp.swift's Force Resync — but works as a Mac trackpad/mouse gesture too,
+    // since .refreshable is cross-platform). AppState.syncNow(force:) is fire-and-forget
+    // (kicks off its own Task internally) rather than async, so this just polls
+    // isSyncing to know when to end the refresh spinner.
+    private func forceResync() async {
+        appState.syncNow(force: true)
+        while appState.isSyncing {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    // iPhone-only note list — a real List(selection:) (see noteSelectionIOS above),
+    // needed so NavigationSplitView can push to the editor column on tap. Mac/iPad keep
+    // the existing custom ScrollView/LazyVStack rendering (ForEach branch above)
+    // untouched. Visuals are simpler here (standard List separators/insets instead of
+    // the custom dividers/selection background used elsewhere) — acceptable since the
+    // immediate goal is restoring the ability to open a note at all on iPhone.
+    @ViewBuilder
+    private var phoneNoteList: some View {
+        List(selection: noteSelectionIOS) {
+            if !appState.searchText.isEmpty {
+                ForEach(displayedNotes) { note in noteRowPhone(note) }
+            } else {
+                if !pinnedNotes.isEmpty {
+                    Section("Pinned") {
+                        ForEach(pinnedNotes) { note in noteRowPhone(note) }
+                    }
+                }
+                if appState.isTrashSelected && !appState.trashedFolders.isEmpty {
+                    Section("Notebooks") {
+                        ForEach(appState.trashedFolders) { folder in trashedFolderRow(folder) }
+                    }
+                }
+                ForEach(grouped, id: \.group) { section in
+                    Section(section.group.title) {
+                        ForEach(section.notes) { note in noteRowPhone(note) }
+                    }
                 }
             }
         }
-        .confirmationDialog(
-            "Permanently delete everything in Trash?",
-            isPresented: $showEmptyTrashConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Empty Trash", role: .destructive) { appState.emptyTrash() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This can't be undone.")
+        // .insetGrouped — iOS's native rounded-card-per-section list style — matches
+        // Android's NoteListScreen.kt card-per-section look (Surface + RoundedCornerShape
+        // per group) without needing to hand-build card backgrounds/corner shapes here.
+        // Mac/iPad keep the plain ScrollView rendering above, untouched. This whole
+        // phoneNoteList view is only ever invoked when isPhoneIdiom is true (i.e. never
+        // on Mac), but the Mac target still compiles this file, and .insetGrouped
+        // doesn't exist in macOS's SwiftUI — #if-gated so Mac builds again.
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        #endif
+        .refreshable { await forceResync() }
+    }
+
+    @ViewBuilder
+    private func noteRowPhone(_ note: Note) -> some View {
+        // textHorizontalPadding: 0 — equalizes the text block's left inset with the
+        // thumbnail's (which only ever gets the row's own outer padding), per request.
+        NoteRowView(note: note, dateString: rowDate(note), textHorizontalPadding: 0)
+            .tag(note.id)
+            .contextMenu {
+                if appState.isTrashSelected {
+                    Button("Restore") { appState.restoreNote(note) }
+                    Button("Delete Permanently", role: .destructive) { appState.permanentlyDeleteNote(note) }
+                } else {
+                    Button(note.isPinned ? "Unpin Note" : "Pin Note") { appState.togglePin(note) }
+                    Button("Delete Note", role: .destructive) { appState.deleteNote(note) }
+                }
+            }
+    }
+
+    // iPhone-only bottom bar: a custom search field (standing in for the native
+    // .searchable field Mac/iPad use) plus a trailing button that's "New Note"
+    // (square.and.pencil) while search is inactive, swapping to "Cancel" in the same
+    // spot the moment the field gains focus or has text — mirroring where the native
+    // search field's own Cancel button would sit, since .searchable's system-drawn
+    // Cancel button can't be hooked into directly to place a custom control beside it.
+    @ViewBuilder
+    private var phoneSearchBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search", text: Binding(get: { appState.searchText }, set: { appState.search($0) }))
+                    .focused($isPhoneSearchFocused)
+                    .submitLabel(.search)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.gray.opacity(0.15), in: Capsule())
+
+            if isPhoneSearchFocused || !appState.searchText.isEmpty {
+                Button {
+                    appState.search("")
+                    isPhoneSearchFocused = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .background(Color.gray.opacity(0.15), in: Circle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    appState.createNote()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .background(Color.gray.opacity(0.15), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .searchable(
-            text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
-            placement: .toolbar,
-            prompt: "Search"
-        )
-        .searchFieldFocused($isSearchFieldFocused)
-        .navigationTitle(navigationTitle)
-        .onChange(of: appState.isFocusingSearch) { _, focused in
-            if focused { isSearchFieldFocused = true; appState.isFocusingSearch = false }
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     // Shared row builder used in both flat and grouped lists. `nextNote` is
@@ -359,8 +564,27 @@ struct NoteRowView: View {
 
     let note: Note
     let dateString: String
+    // Mac/iPad (default 16): the text block gets 16pt more than the thumbnail's
+    // implicit inset (just the row's own outer 10pt padding below), intentionally —
+    // see the divider math in NoteListView's noteRow(_:nextNote:). iPhone's
+    // noteRowPhone passes 0 instead, so the text lines up with the thumbnail's edge
+    // (equal left/right padding), since that card layout has no such divider to align.
+    var textHorizontalPadding: CGFloat = 16
 
     private var isSelected: Bool { appState.selectedNoteID == note.id }
+
+    // iPad only — keep the selected row in the "active" dark-yellow/white look at all
+    // times, instead of dimming to gray once focus leaves the sidebar (which is what
+    // happens on Mac, and what happened here too before this: tapping into a note to
+    // edit moves focus to the editor, appState.isSidebarFocused becomes false, and the
+    // row fell back to noteRowSelectedInactiveBackground). Mac's dimming behavior is
+    // left untouched below.
+    #if os(iOS)
+    private var isPadIdiom: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    #else
+    private var isPadIdiom: Bool { false }
+    #endif
+    private var isActiveHighlighted: Bool { isPadIdiom && isSelected }
 
     // Mirrors Apple Notes' list row thumbnail — square, rounded, first image only.
     // Size/corner radius match Android's NoteRow thumbnail (56.dp / 14.dp) so the same
@@ -382,28 +606,30 @@ struct NoteRowView: View {
                     }
                     Text(note.title.isEmpty ? "Untitled" : note.title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isActiveHighlighted ? .white : .primary)
                         .lineLimit(1)
                 }
 
-                // Line 2 — timestamp (same color as the title) + preview (gray)
+                // Line 2 — timestamp (same color as the title) + preview (gray, unless
+                // isActiveHighlighted — see isPadIdiom above — in which case both go
+                // white for contrast against the vivid-yellow background).
                 Group {
                     if note.preview.isEmpty {
                         Text(dateString)
                     } else {
-                        Text(dateString) + Text("  \(note.preview)").foregroundStyle(.secondary)
+                        Text(dateString) + Text("  \(note.preview)").foregroundStyle(isActiveHighlighted ? .white : .secondary)
                     }
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(.primary)
+                .foregroundStyle(isActiveHighlighted ? .white : .primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             }
-            // 16px padding around just the title/metadata/preview text block — horizontal
+            // Padding around just the title/metadata/preview text block — horizontal
             // only (top/bottom untouched). The thumbnail and the row's own outer padding
             // (below) are untouched, so the divider and selection background positions/
             // sizing logic stay as they were.
-            .padding(.horizontal, 16)
+            .padding(.horizontal, textHorizontalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if let thumbnailURL {
@@ -426,7 +652,11 @@ struct NoteRowView: View {
         .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected ? (appState.isSidebarFocused ? notesYellowDimmed : AppColors.noteRowSelectedInactiveBackground(colorScheme)) : Color.clear)
+                .fill(
+                    isActiveHighlighted
+                        ? AppColors.vividYellow
+                        : (isSelected ? (appState.isSidebarFocused ? notesYellowDimmed : AppColors.noteRowSelectedInactiveBackground(colorScheme)) : Color.clear)
+                )
         )
     }
 }

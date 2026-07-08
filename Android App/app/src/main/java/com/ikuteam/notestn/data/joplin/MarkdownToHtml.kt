@@ -10,6 +10,12 @@ package com.ikuteam.notestn.data.joplin
 object MarkdownToHtml {
 
     private val boldRegex = Regex("\\*\\*(.+?)\\*\\*|__(.+?)__")
+    // Joplin's highlight syntax (rendered as <mark> in the editor — see HtmlToMarkdown.kt's
+    // "mark" case, which already emits this on the way out; this was the missing return path).
+    private val highlightRegex = Regex("==(.+?)==")
+    // Same gap as highlight above — HtmlToMarkdown.kt's "s"/"del"/"strike" case already
+    // emits ~~text~~ on save; this was the missing return path for the load side.
+    private val strikethroughRegex = Regex("~~(.+?)~~")
     private val italicRegex = Regex("(?<!\\*)\\*(?!\\*)(.+?)\\*(?!\\*)|(?<!_)_(?!_)(.+?)_(?!_)")
     private val inlineCodeRegex = Regex("`([^`]+)`")
     private val imageRegex = Regex("!\\[([^\\]]*)]\\(([^)]+)\\)")
@@ -157,6 +163,8 @@ object MarkdownToHtml {
         result = imageRegex.replace(result) { m -> "<img src=\"${m.groupValues[2]}\" alt=\"${m.groupValues[1]}\">" }
         result = linkRegex.replace(result) { m -> "<a href=\"${m.groupValues[2]}\">${m.groupValues[1]}</a>" }
         result = boldRegex.replace(result) { m -> "<strong>${m.groupValues[1].ifEmpty { m.groupValues[2] }}</strong>" }
+        result = highlightRegex.replace(result) { m -> "<mark>${m.groupValues[1]}</mark>" }
+        result = strikethroughRegex.replace(result) { m -> "<s>${m.groupValues[1]}</s>" }
         result = italicRegex.replace(result) { m -> "<em>${m.groupValues[1].ifEmpty { m.groupValues[2] }}</em>" }
         result = inlineCodeRegex.replace(result) { m -> "<code>${m.groupValues[1]}</code>" }
         return result

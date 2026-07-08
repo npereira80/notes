@@ -10,6 +10,12 @@ import Foundation
 enum MarkdownToHtml {
 
     private static let boldRegex = try! NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*|__(.+?)__")
+    // Joplin's highlight syntax (rendered as <mark> in the editor — see HtmlToMarkdown.swift's
+    // "mark" case, which already emits this on the way out; this was the missing return path).
+    private static let highlightRegex = try! NSRegularExpression(pattern: "==(.+?)==")
+    // Same gap as highlight above — HtmlToMarkdown.swift's "s"/"del"/"strike" case already
+    // emits ~~text~~ on save; this was the missing return path for the load side.
+    private static let strikethroughRegex = try! NSRegularExpression(pattern: "~~(.+?)~~")
     private static let italicRegex = try! NSRegularExpression(pattern: "(?<!\\*)\\*(?!\\*)(.+?)\\*(?!\\*)|(?<!_)_(?!_)(.+?)_(?!_)")
     private static let inlineCodeRegex = try! NSRegularExpression(pattern: "`([^`]+)`")
     private static let imageRegex = try! NSRegularExpression(pattern: "!\\[([^\\]]*)\\]\\(([^)]+)\\)")
@@ -143,6 +149,8 @@ enum MarkdownToHtml {
         result = replaceAll(imageRegex, result) { g in "<img src=\"\(g[1])\" alt=\"\(g[0])\">" }
         result = replaceAll(linkRegex, result) { g in "<a href=\"\(g[1])\">\(g[0])</a>" }
         result = replaceAll(boldRegex, result) { g in "<strong>\(g[0].isEmpty ? g[1] : g[0])</strong>" }
+        result = replaceAll(highlightRegex, result) { g in "<mark>\(g[0])</mark>" }
+        result = replaceAll(strikethroughRegex, result) { g in "<s>\(g[0])</s>" }
         result = replaceAll(italicRegex, result) { g in "<em>\(g[0].isEmpty ? g[1] : g[0])</em>" }
         result = replaceAll(inlineCodeRegex, result) { g in "<code>\(g[0])</code>" }
         return result

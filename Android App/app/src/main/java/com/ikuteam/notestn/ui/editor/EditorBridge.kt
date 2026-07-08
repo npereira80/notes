@@ -9,6 +9,7 @@ data class EditorSelectionState(
     val italic: Boolean = false,
     val code: Boolean = false,
     val strikethrough: Boolean = false,
+    val highlight: Boolean = false,
     val inCode: Boolean = false,
     val inBlockquote: Boolean = false,
     val inBulletList: Boolean = false,

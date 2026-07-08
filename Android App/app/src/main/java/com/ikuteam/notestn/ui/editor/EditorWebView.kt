@@ -2,7 +2,9 @@ package com.ikuteam.notestn.ui.editor
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.view.ViewGroup
 import android.util.Log
@@ -22,6 +24,9 @@ import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewFeature
 import com.ikuteam.notestn.data.DatabaseManager
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.File
 
 /**
  * Hosts the shared ProseMirror editor bundle (Mac/EditorBundle, built into
@@ -86,7 +91,28 @@ fun EditorWebView(
                     override fun shouldInterceptRequest(
                         view: WebView,
                         request: WebResourceRequest,
-                    ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+                    ): WebResourceResponse? {
+                        // Chromium (the WebView's rendering engine) has no built-in HEIC/HEIF
+                        // decoder, unlike Coil/ImageDecoder which the note list's thumbnails
+                        // already go through — so an <img> pointed straight at a .heic
+                        // resource silently fails to render here. Transcode to JPEG on the
+                        // fly for just this request; the original HEIC file on disk (and
+                        // whatever gets synced to Joplin Cloud) is never touched.
+                        val url = request.url
+                        val filename = url.lastPathSegment
+                        if (url.host == "appassets.androidplatform.net" && url.path?.startsWith("/resources/") == true && filename != null) {
+                            val mimeType = DatabaseManager.shared.resourceMimeTypeForFilename(filename)
+                            if (mimeType == "image/heic" || mimeType == "image/heif") {
+                                val jpegBytes = transcodeHeicToJpeg(File(DatabaseManager.shared.resourcesDirectory, filename))
+                                if (jpegBytes != null) {
+                                    return WebResourceResponse("image/jpeg", "utf-8", ByteArrayInputStream(jpegBytes))
+                                }
+                                // Decode failed — fall through to the normal asset loader below,
+                                // same (broken) behavior as before this fix rather than crashing.
+                            }
+                        }
+                        return assetLoader.shouldInterceptRequest(url)
+                    }
 
                     override fun shouldOverrideUrlLoading(
                         view: WebView,
@@ -141,3 +167,21 @@ private fun applyDarkMode(webView: WebView, dark: Boolean) {
 private fun openInBrowser(context: android.content.Context, url: Uri) {
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url)) }
 }
+
+/** Decodes a HEIC/HEIF file and re-encodes it as JPEG bytes, for serving to the
+ * WebView in place of the original (see shouldInterceptRequest above). Forces
+ * ALLOCATOR_SOFTWARE so the resulting Bitmap is guaranteed compressible — the
+ * platform default allocator can hand back a hardware Bitmap that Bitmap.compress
+ * can't read pixels from. Returns null on any failure (corrupt file, decode error,
+ * etc.) so the caller can fall back to the previous (unsupported-format) behavior
+ * instead of crashing the WebView load. */
+private fun transcodeHeicToJpeg(file: File): ByteArray? = runCatching {
+    val source = ImageDecoder.createSource(file)
+    val bitmap = ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+    }
+    ByteArrayOutputStream().use { out ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        out.toByteArray()
+    }
+}.getOrNull()

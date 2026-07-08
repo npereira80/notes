@@ -1,5 +1,9 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Combine
 
 @MainActor
@@ -66,7 +70,12 @@ final class AppState: ObservableObject {
         // SessionModel.ts server-side) — re-checking on resume gives a session that
         // died while the app was backgrounded a chance to be silently replaced (see
         // syncNow's .unauthorized handling) before the user notices.
-        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        #if os(macOS)
+        let didBecomeActiveNotification = NSApplication.didBecomeActiveNotification
+        #else
+        let didBecomeActiveNotification = UIApplication.didBecomeActiveNotification
+        #endif
+        NotificationCenter.default.publisher(for: didBecomeActiveNotification)
             .sink { [weak self] _ in self?.syncNow() }
             .store(in: &cancellables)
     }

@@ -15293,6 +15293,26 @@
       return false;
     }
   }
+  function stripPastedTables(html) {
+    const dom = new DOMParser().parseFromString(html, "text/html");
+    let tables = Array.from(dom.body.querySelectorAll("table"));
+    let guard = 0;
+    while (tables.length > 0 && guard < 20) {
+      for (const table of tables) {
+        if (table.querySelector("table")) continue;
+        const frag = dom.createDocumentFragment();
+        for (const cell of Array.from(table.querySelectorAll("td, th"))) {
+          const p = dom.createElement("p");
+          while (cell.firstChild) p.appendChild(cell.firstChild);
+          frag.appendChild(p);
+        }
+        table.replaceWith(frag);
+      }
+      tables = Array.from(dom.body.querySelectorAll("table"));
+      guard++;
+    }
+    return dom.body.innerHTML;
+  }
   var moveFromTitleToBody = (state, dispatch) => {
     const { $from } = state.selection;
     if ($from.parent.type !== schema_default.nodes.title) return false;
@@ -15399,6 +15419,7 @@
       italic: hasMark(m.em),
       code: hasMark(m.code),
       strikethrough: hasMark(m.strikethrough),
+      highlight: hasMark(m.highlight),
       inCode,
       inBlockquote,
       inBulletList,
@@ -15424,6 +15445,8 @@
     const isReadOnly = /[?&]readonly=1(&|$)/.test(location.search);
     const isAndroid = /[?&]platform=android(&|$)/.test(location.search);
     if (isAndroid) document.body.classList.add("pm-android");
+    const isIOSPhone = /[?&]platform=ios-phone(&|$)/.test(location.search);
+    if (isIOSPhone) document.body.classList.add("pm-ios-phone");
     let lastTitle = "";
     let lastHTML = "";
     let selectionDebounce = null;
@@ -15648,6 +15671,17 @@
                 }
               }
               return false;
+            }
+          }
+        }),
+        // Flatten table-based layout structure out of pasted HTML — see
+        // stripPastedTables above. Only runs for the normal (non-image,
+        // non-bare-URL) rich-HTML paste path; the two handlePaste plugins above
+        // already fully take over image/URL pastes before this would apply.
+        new Plugin({
+          props: {
+            transformPastedHTML(html) {
+              return stripPastedTables(html);
             }
           }
         })
