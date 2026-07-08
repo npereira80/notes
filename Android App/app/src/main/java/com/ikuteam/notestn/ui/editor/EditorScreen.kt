@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ArrowBack
@@ -410,6 +412,10 @@ private fun EditorToolbar(
         ToolbarToggleButton(Icons.Filled.FormatStrikethrough, "Strikethrough", s.strikethrough) { coordinator.execCommand("strikethrough") }
         ToolbarToggleButton(Icons.Filled.BorderColor, "Highlight", s.highlight) { coordinator.execCommand("highlight") }
         ToolbarToggleButton(Icons.Filled.Code, "Inline Code", s.code) { coordinator.execCommand("code") }
+
+        ToolbarDivider()
+        ToolbarToggleButton(Icons.Filled.FormatListBulleted, "Bullet List", s.inBulletList) { coordinator.execCommand("bulletList") }
+        ToolbarToggleButton(Icons.Filled.FormatListNumbered, "Number List", s.inOrderedList) { coordinator.execCommand("orderedList") }
 
         ToolbarDivider()
         ToolbarToggleButton(Icons.Filled.FormatQuote, "Blockquote", s.inBlockquote) { coordinator.execCommand("blockquote") }

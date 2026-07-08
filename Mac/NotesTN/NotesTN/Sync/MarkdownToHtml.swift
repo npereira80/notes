@@ -84,10 +84,15 @@ enum MarkdownToHtml {
                 while i < lines.count, let m = firstMatch(checklistRegex, lines[i]) {
                     let checked = m.groups[1].lowercased() == "x"
                     let text = inline(m.groups[2])
+                    // Class must be "md-checkbox" (checked items: "md-checkbox checked") —
+                    // that's what schema.ts's task_list_item.parseDOM matches on
+                    // (`li.md-checkbox`), vs. list_item's `li:not(.md-checkbox)`. Getting this
+                    // wrong makes ProseMirror parse these as plain list items instead of task
+                    // items, silently turning the whole list into a bullet list.
                     if checked {
-                        html += "<li class=\"checked\"><input type=\"checkbox\" checked><div>" + text + "</div></li>\n"
+                        html += "<li class=\"md-checkbox checked\"><input type=\"checkbox\" checked><div>" + text + "</div></li>\n"
                     } else {
-                        html += "<li><input type=\"checkbox\"><div>" + text + "</div></li>\n"
+                        html += "<li class=\"md-checkbox\"><input type=\"checkbox\"><div>" + text + "</div></li>\n"
                     }
                     i += 1
                 }

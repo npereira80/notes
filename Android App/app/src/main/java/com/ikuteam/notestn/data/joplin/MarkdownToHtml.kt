@@ -93,10 +93,15 @@ object MarkdownToHtml {
                         val match = checklistRegex.find(lines[i])!!
                         val checked = match.groupValues[2].lowercase() == "x"
                         val text = inline(match.groupValues[3])
+                        // Class must be "md-checkbox" (checked items: "md-checkbox checked") —
+                        // that's what schema.ts's task_list_item.parseDOM matches on
+                        // (`li.md-checkbox`), vs. list_item's `li:not(.md-checkbox)`. Getting
+                        // this wrong makes ProseMirror parse these as plain list items instead
+                        // of task items, silently turning the whole list into a bullet list.
                         if (checked) {
-                            html.append("<li class=\"checked\"><input type=\"checkbox\" checked><div>").append(text).append("</div></li>\n")
+                            html.append("<li class=\"md-checkbox checked\"><input type=\"checkbox\" checked><div>").append(text).append("</div></li>\n")
                         } else {
-                            html.append("<li><input type=\"checkbox\"><div>").append(text).append("</div></li>\n")
+                            html.append("<li class=\"md-checkbox\"><input type=\"checkbox\"><div>").append(text).append("</div></li>\n")
                         }
                         i++
                     }

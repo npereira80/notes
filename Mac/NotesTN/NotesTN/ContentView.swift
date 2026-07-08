@@ -1,6 +1,4 @@
 import SwiftUI
-
-#if os(macOS)
 import AppKit
 
 // Mac only. NavigationSplitView's `ideal:` width is only a hint for the very first
@@ -31,11 +29,21 @@ private struct WindowRestorationDisabler: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
-#endif
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
+
+    // Persists whether the sidebar (Sidebar column: All Notes, Trash, etc.) is
+    // expanded or collapsed across launches — per request. First launch (no saved
+    // preference yet) starts collapsed; every launch after that restores whatever
+    // the user last left it as (see the onChange below that saves it).
+    private static let sidebarVisibilityKey = "sidebarExpanded"
+    @State private var columnVisibility: NavigationSplitViewVisibility = {
+        guard UserDefaults.standard.object(forKey: sidebarVisibilityKey) != nil else {
+            return .doubleColumn // collapsed — no saved preference yet (first launch)
+        }
+        return UserDefaults.standard.bool(forKey: sidebarVisibilityKey) ? .all : .doubleColumn
+    }()
 
     // Persists the note list column's width across launches. NavigationSplitView has
     // no live width binding to read the user's dragged size back from — only a static
@@ -44,21 +52,11 @@ struct ContentView: View {
     // saved value continuously up to date, which covers "save on app close" for free
     // without needing a separate app-termination hook.
     private static let noteListWidthKey = "noteListColumnWidth"
-    // Default (no saved width yet, e.g. first launch) is the column's max — 360, matching
-    // the `max:` below.
-    @State private var noteListColumnWidth: CGFloat = {
-        #if os(macOS)
-        // Mac only, per request: every launch starts at max width (360), ignoring
-        // whatever was saved from the previous session. Resizing during the running
-        // session is still written to UserDefaults below (onChange, unchanged) — it's
-        // just no longer read back as the initial value here. iPad keeps restoring
-        // its saved width across launches (the #else branch below).
-        return 360
-        #else
-        let saved = UserDefaults.standard.double(forKey: noteListWidthKey)
-        return saved > 0 ? CGFloat(saved) : 360
-        #endif
-    }()
+    // Every launch starts at max width (360), ignoring whatever was saved from the
+    // previous session, per request. Resizing during the running session is still
+    // written to UserDefaults below (onChange, unchanged) — it's just no longer read
+    // back as the initial value here.
+    @State private var noteListColumnWidth: CGFloat = 360
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -74,14 +72,15 @@ struct ContentView: View {
                             }
                     }
                 )
-                #if os(macOS)
                 .background(WindowRestorationDisabler())
-                #endif
                 .navigationSplitViewColumnWidth(min: 220, ideal: noteListColumnWidth, max: 360)
         } detail: {
             EditorView()
         }
         .navigationSplitViewStyle(.balanced)
+        .onChange(of: columnVisibility) { _, newValue in
+            UserDefaults.standard.set(newValue == .all, forKey: Self.sidebarVisibilityKey)
+        }
     }
 }
 

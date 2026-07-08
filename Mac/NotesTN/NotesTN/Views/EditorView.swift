@@ -143,6 +143,20 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         wv.evaluateJavaScript("window.NativeEditor?.focus()")
     }
 
+    // MARK: Native toolbar inset (content flowing under the translucent toolbar)
+
+    /// Pushes the note's content down by `points` inside the WebView's own scrollable
+    /// area (see build.mjs's --native-toolbar-inset), so text
+    /// starts right below the toolbar visually but can still scroll further up
+    /// underneath its translucent material instead of hard-clipping flush against it.
+    /// The WKWebView itself extends full-height under the toolbar (see
+    /// RichTextEditorView's .ignoresSafeArea below) — this is what keeps the *content*
+    /// looking like it starts in the same place it used to.
+    func setTopInset(_ points: CGFloat) {
+        guard let wv = webView else { return }
+        wv.evaluateJavaScript("document.documentElement.style.setProperty('--native-toolbar-inset', '\(points)px')")
+    }
+
     // MARK: WKNavigationDelegate — open links in default browser
 
     nonisolated func webView(
@@ -287,6 +301,11 @@ struct NoteEditorView: View {
     @StateObject private var editorCoordinator = EditorCoordinator()
     @State private var isShowingImagePicker = false
     @State private var showPermanentDeleteConfirm = false
+    // Captured below (see the GeometryReader background) from the safe area the
+    // native window toolbar reserves — pushed into the WebView's own content via
+    // editorCoordinator.setTopInset so it can flow its full height underneath the
+    // toolbar's translucent material instead of hard-clipping flush against it.
+    @State private var toolbarInset: CGFloat = 0
     private let noteID: String
     private let initialTitle: String
     private let initialBody: String
@@ -305,6 +324,9 @@ struct NoteEditorView: View {
             // MARK: Toolbar
             // A trashed note is read-only until restored — Restore/Delete Permanently
             // replace the formatting toolbar entirely instead of sitting alongside it.
+            // The formatting toolbar itself now lives in the native window toolbar
+            // (see .toolbar below) instead of this content row, so it renders on the
+            // same line as NoteListView's search field / New Note button.
             if readOnly {
                 HStack {
                     Spacer()
@@ -317,25 +339,52 @@ struct NoteEditorView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 11)
                 .background(.windowBackground)
-            } else {
-                EditorToolbarView(
-                    coordinator: editorCoordinator,
-                    onInsertImage: { isShowingImagePicker = true }
-                )
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13.75)
-                .background(.windowBackground)
             }
-
-            Divider()
 
             // Title now lives inside the shared ProseMirror doc (see
             // Mac/EditorBundle's `pm-title` node), so it scrolls together with
             // the body instead of sitting in a separate native field above it.
+            // .ignoresSafeArea lets this extend its full height underneath the native
+            // toolbar's translucent material — toolbarInset (captured below) tells the
+            // WebView's own content to leave the same visual gap it used to via CSS
+            // padding instead, so text still starts in the same place but can keep
+            // scrolling up underneath the toolbar instead of hard-clipping against it.
             RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(edges: .top)
+        }
+        .background(
+            // Reads the safe area the native toolbar reserves — measured on this
+            // (non-ignoring) VStack, not on RichTextEditorView itself, since a view
+            // that's ignoring a safe area no longer reports an inset for that edge.
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { toolbarInset = proxy.safeAreaInsets.top }
+                    .onChange(of: proxy.safeAreaInsets.top) { _, newValue in toolbarInset = newValue }
+            }
+        )
+        .onChange(of: toolbarInset) { _, newValue in editorCoordinator.setTopInset(newValue) }
+        .onChange(of: editorCoordinator.isReady) { _, ready in
+            // The CSS variable lives on the page itself, so a fresh page load (or
+            // switching notes, which re-keys this whole view — see NotesNavHost)
+            // starts back at the default 0px until we push the current value again.
+            if ready { editorCoordinator.setTopInset(toolbarInset) }
         }
         .background(.windowBackground)
+        .toolbar {
+            // Merges into the same native window toolbar as NoteListView's search
+            // field / New Note button (NavigationSplitView combines .toolbar content
+            // from every visible column into one bar) — not shown for a read-only
+            // (trashed) note, which uses Restore/Delete Permanently instead.
+            if !readOnly {
+                ToolbarItem(placement: .primaryAction) {
+                    EditorToolbarView(
+                        coordinator: editorCoordinator,
+                        onInsertImage: { isShowingImagePicker = true }
+                    )
+                }
+            }
+        }
         .confirmationDialog(
             "Permanently delete this note?",
             isPresented: $showPermanentDeleteConfirm,
@@ -478,7 +527,7 @@ struct EditorToolbarView: View {
     var onInsertImage: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 8) {
             // Text style picker
             Menu {
                 // "Title" reuses heading level 1 (restyled in CSS to match the note
@@ -494,14 +543,18 @@ struct EditorToolbarView: View {
                 Button("Monospaced") { coordinator.execCommand("code") }
                 Button("Code Block") { coordinator.execCommand("codeBlock") }
             } label: {
+                // .imageScale(.large) instead of a fixed point size/frame — lets AppKit
+                // size the icon to the native toolbar's own max comfortable height
+                // instead of us guessing a value that could get clipped by the
+                // toolbar's fixed row height.
                 Image(systemName: "textformat")
-                    .frame(width: 32.5, height: 27.5)
+                    .imageScale(.large)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 45)
+            .padding(.leading, 8)
 
-            Divider().frame(height: 20)
+            Divider()
 
             // Task list + Insert Image — moved up front (2nd/3rd items), per request
             FormatToggleButton(icon: "checklist", tooltip: "Task List", isActive: coordinator.selectionState.inTaskList) {
@@ -511,7 +564,7 @@ struct EditorToolbarView: View {
                 onInsertImage()
             }
 
-            Divider().frame(height: 20)
+            Divider()
 
             // Inline marks
             FormatToggleButton(icon: "bold", tooltip: "Bold (⌘B)", isActive: coordinator.selectionState.bold) {
@@ -530,14 +583,24 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("code")
             }
 
-            Divider().frame(height: 20)
+            Divider()
+
+            // Lists
+            FormatToggleButton(icon: "list.bullet", tooltip: "Bullet List", isActive: coordinator.selectionState.inBulletList) {
+                coordinator.execCommand("bulletList")
+            }
+            FormatToggleButton(icon: "list.number", tooltip: "Number List", isActive: coordinator.selectionState.inOrderedList) {
+                coordinator.execCommand("orderedList")
+            }
+
+            Divider()
 
             // Block formatting
             FormatToggleButton(icon: "quote.opening", tooltip: "Blockquote", isActive: coordinator.selectionState.inBlockquote) {
                 coordinator.execCommand("blockquote")
             }
 
-            Divider().frame(height: 20)
+            Divider()
 
             // Indent / outdent
             FormatButton(icon: "decrease.indent", tooltip: "Outdent (⇧Tab)") {
@@ -547,7 +610,7 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("indent")
             }
 
-            Divider().frame(height: 20)
+            Divider()
 
             // Insert (image moved above; table/HR remain)
             FormatButton(icon: "tablecells", tooltip: "Insert Table") {
@@ -557,7 +620,7 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("horizontalRule")
             }
 
-            Divider().frame(height: 20)
+            Divider()
 
             // Link
             FormatToggleButton(icon: "link", tooltip: "Insert Link", isActive: coordinator.selectionState.hasLink) {
@@ -568,6 +631,7 @@ struct EditorToolbarView: View {
                     showLinkInput()
                 }
             }
+            .padding(.trailing, 8)
         }
         .contentShape(Rectangle())  // entire toolbar row is event-opaque; gaps between buttons don't fall through
     }
@@ -603,9 +667,12 @@ struct FormatButton: View {
 
     var body: some View {
         Button(action: action) {
+            // .imageScale(.large) instead of a fixed point size/frame — matches the
+            // text-style menu icon above: lets AppKit size this to the native
+            // toolbar's own max comfortable height rather than a guessed value that
+            // could get clipped by the toolbar's fixed row height.
             Image(systemName: icon)
-                .font(.system(size: 15))
-                .frame(width: 32.5, height: 27.5)
+                .imageScale(.large)
                 .contentShape(Rectangle())  // full frame is clickable, not just icon pixels
         }
         .buttonStyle(.borderless)
@@ -623,8 +690,8 @@ struct FormatToggleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 15))
-                .frame(width: 32.5, height: 27.5)
+                .imageScale(.large)
+                .padding(4)
                 .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
                 .cornerRadius(4)
                 .contentShape(Rectangle())  // full frame is clickable

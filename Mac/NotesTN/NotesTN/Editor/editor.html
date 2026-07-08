@@ -32,6 +32,13 @@
     --color-highlight-text: #b04ac5;
     --color-link: #deaa33;
     --color-hr: rgba(0, 0, 0, 0.2);
+    /* Mac only — set imperatively via EditorWebView.swift's setTopInset (mirrors
+       Android's data-theme trick above) whenever the WKWebView is resized to
+       flow underneath the native window toolbar's translucent material, so
+       content has room to scroll clear of the toolbar's icons instead of
+       hard-clipping flush against them. 0px everywhere else (Android/iOS don't
+       set this variable, so it's a no-op there). */
+    --native-toolbar-inset: 0px;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -90,7 +97,7 @@
     min-height: 100%;
     background: var(--color-bg);
     color: var(--color-text);
-    padding: 0 24px 48px 24px;
+    padding: var(--native-toolbar-inset) 24px 48px 24px;
     font-family: var(--font-body);
     font-size: 16px;
     line-height: 1.7;

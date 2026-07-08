@@ -34,6 +34,7 @@ struct SidebarView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var newFolderName: String = ""
     @State private var isAddingFolder = false
+    @FocusState private var isAddingFolderFieldFocused: Bool
     @State private var renamingFolderID: String? = nil
     @State private var renameText: String = ""
     // Log Out lives in NotesTNApp.swift's menu bar on Mac (no visible chrome needed
@@ -58,16 +59,25 @@ struct SidebarView: View {
     @FocusState private var isFocused: Bool
 
     // Rounded rect inset from the row's left/right edges — mirrors the selected
-    // note row's look in NoteListView.swift (RoundedRectangle(cornerRadius: 8)
-    // sized to the row's own horizontal padding) instead of List's default
-    // edge-to-edge listRowBackground fill.
+    // note row's look in NoteListView.swift (RoundedRectangle(cornerRadius: 10),
+    // see noteRow's .background there) sized to the row's own horizontal padding,
+    // instead of List's default edge-to-edge listRowBackground fill.
     private func rowBackground(selected: Bool) -> some View {
         let color: Color = selected
             ? (appState.isSidebarFocused ? AppColors.vividYellow : AppColors.sidebarSelectedInactiveBackground(colorScheme))
             : Color.clear
-        return RoundedRectangle(cornerRadius: 6)
+        return RoundedRectangle(cornerRadius: 10)
             .fill(color)
             .padding(.horizontal, 8)
+            // iPad only, per request — insets the fill vertically within the row's
+            // existing height/spacing (untouched) to make just the highlight box itself
+            // ~30% shorter, rather than shrinking row density/tap targets. Mac keeps its
+            // original edge-to-edge (within the row) height. Approximate — the row's
+            // actual rendered height isn't directly queryable here, so this may need a
+            // point or two of adjustment after visual testing on device.
+            #if os(iOS)
+            .padding(.vertical, isPadIdiom ? 4 : 0)
+            #endif
     }
 
     private func rowForeground(selected: Bool) -> Color {
@@ -201,19 +211,31 @@ struct SidebarView: View {
             HStack {
                 Image(systemName: "folder.badge.plus")
                     .foregroundStyle(.secondary)
-                TextField("Notebook name", text: $newFolderName, onCommit: {
-                    let name = newFolderName.trimmingCharacters(in: .whitespaces)
-                    if !name.isEmpty {
-                        appState.createFolder(title: name)
+                // .onSubmit instead of TextField's older onCommit: closure param —
+                // onCommit didn't reliably fire for a TextField inside a List row on
+                // iPadOS (Return key dismissed nothing, notebook never got created,
+                // and focus/the keyboard stayed stuck on the field). .onSubmit +
+                // .focused is the modern, cross-platform-reliable equivalent, and
+                // explicitly clearing focus below guarantees the keyboard/cursor
+                // actually releases even if removing the row doesn't do it on its own.
+                TextField("Notebook name", text: $newFolderName)
+                    .textFieldStyle(.plain)
+                    .focused($isAddingFolderFieldFocused)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        let name = newFolderName.trimmingCharacters(in: .whitespaces)
+                        if !name.isEmpty {
+                            appState.createFolder(title: name)
+                        }
+                        newFolderName = ""
+                        isAddingFolder = false
+                        isAddingFolderFieldFocused = false
                     }
-                    newFolderName = ""
-                    isAddingFolder = false
-                })
-                .textFieldStyle(.plain)
-                .onExitCommandCompat {
-                    newFolderName = ""
-                    isAddingFolder = false
-                }
+                    .onExitCommandCompat {
+                        newFolderName = ""
+                        isAddingFolder = false
+                        isAddingFolderFieldFocused = false
+                    }
             }
         }
     }
@@ -250,15 +272,21 @@ struct SidebarView: View {
             HStack {
                 Button {
                     isAddingFolder = true
+                    isAddingFolderFieldFocused = true
                 } label: {
                     Label("Add Notebook", systemImage: "folder.badge.plus")
                         .labelStyle(.iconOnly)
                         .foregroundStyle(Color.secondary)
+                        // Apple's 44x44pt minimum touch target — .plain buttonStyle only
+                        // gives the tap area the icon's own tiny intrinsic size otherwise,
+                        // which is forgiving enough for a Mac pointer but easy to miss with
+                        // a finger on iPad. .contentShape makes the whole frame tappable,
+                        // not just the visible glyph.
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.vertical, 8)
-                .padding(.leading, 20)
-                .padding(.trailing, 8)
+                .padding(.leading, 8)
                 Spacer()
                 #if !os(macOS)
                 if joplinAccountStore.account != nil {
@@ -271,9 +299,12 @@ struct SidebarView: View {
                             Label("Force Resync", systemImage: "arrow.triangle.2.circlepath")
                                 .labelStyle(.iconOnly)
                                 .foregroundStyle(Color.secondary)
+                                // Same 44x44pt minimum touch target fix as Add Notebook
+                                // above — these all had the same too-small tap area on iPad.
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .padding(8)
                         .help("Force Resync")
                     }
                     Button {
@@ -282,9 +313,10 @@ struct SidebarView: View {
                         Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
                             .labelStyle(.iconOnly)
                             .foregroundStyle(Color.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(8)
                 } else if isPadIdiom {
                     // iPad only — the only touch-reachable way to log in; previously this
                     // only existed inside NotesTNApp.swift's .commands (iPadOS's Mac-style
@@ -296,9 +328,10 @@ struct SidebarView: View {
                         Label("Log In to Joplin Cloud…", systemImage: "person.crop.circle.badge.plus")
                             .labelStyle(.iconOnly)
                             .foregroundStyle(Color.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(8)
                     .help("Log In to Joplin Cloud…")
                 }
                 #endif

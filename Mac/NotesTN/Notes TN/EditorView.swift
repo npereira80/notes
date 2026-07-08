@@ -295,6 +295,14 @@ struct NoteEditorView: View {
     private let initialBody: String
     private let readOnly: Bool
 
+    // iPad only — custom search field (NoteListView.swift's own .searchable didn't
+    // reliably dock into the toolbar in this app's 3-column NavigationSplitView; it
+    // silently fell back to rendering inline under the note list's title instead).
+    // Declared here, next to the New Note button below, so both land in this
+    // column's (detail's) own toolbar segment — the trailing/top-right area above
+    // the editor pane — per the red-boxed mockup.
+    @FocusState private var isTabletSearchFocused: Bool
+
     // iPhone only (leave iPad/Mac/Android untouched) — the formatting toolbar floats
     // as a rounded, horizontally-scrolling bar just above the keyboard (mirrors
     // Android's EditorScreen.kt Surface-over-WebView approach) instead of sitting in
@@ -371,14 +379,37 @@ struct NoteEditorView: View {
             keyboardHeight = 0
         }
         .toolbar {
+            // New Note first (leading), search field second (trailing) — declaration
+            // order is left-to-right for .primaryAction items. iPhone and iPad both
+            // get New Note; default system button styling (no .foregroundStyle
+            // override) per request.
             if !readOnly {
                 ToolbarItem(placement: .primaryAction) {
                     Button { appState.createNote() } label: {
                         Image(systemName: "square.and.pencil")
                     }
-                    .foregroundStyle(Color.secondary)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
+            // iPad only — see isTabletSearchFocused's doc comment above. A separate
+            // ToolbarItem from the New Note button above (not merged into one), per
+            // earlier request — .sharedBackgroundVisibility(.hidden) on both stops
+            // iPadOS from auto-fusing adjacent .primaryAction items into one shared
+            // pill.
+            if !isPhoneIdiom {
+                ToolbarItem(placement: .primaryAction) {
+                    tabletSearchField
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+        }
+        .onChange(of: appState.isFocusingSearch) { _, focused in
+            // iPhone's own search field lives in NoteListView.swift, which has its
+            // own identical onChange handler for isPhoneSearchFocused — leave
+            // appState.isFocusingSearch untouched here so that handler still fires.
+            guard focused, !isPhoneIdiom else { return }
+            isTabletSearchFocused = true
+            appState.isFocusingSearch = false
         }
         .confirmationDialog(
             "Permanently delete this note?",
@@ -424,6 +455,36 @@ struct NoteEditorView: View {
 
     private var trashedNote: Note? {
         appState.trashedNotes.first { $0.id == noteID }
+    }
+
+    // iPad-only compact search field, placed directly in this view's own toolbar
+    // (see .toolbar above) next to the New Note button — .searchable(placement:
+    // .toolbar) attached to NoteListView.swift didn't reliably dock into the native
+    // toolbar in this app's 3-column NavigationSplitView (it silently rendered
+    // inline under the note list's title instead), so this is a hand-built
+    // stand-in, matching phoneSearchBar's look in NoteListView.swift.
+    @ViewBuilder
+    private var tabletSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search", text: Binding(get: { appState.searchText }, set: { appState.search($0) }))
+                .focused($isTabletSearchFocused)
+                .submitLabel(.search)
+                .frame(minWidth: 100, idealWidth: 180, maxWidth: 220)
+            if !appState.searchText.isEmpty {
+                Button {
+                    appState.search("")
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.gray.opacity(0.15), in: Capsule())
     }
 
     // iPhone-only floating formatting toolbar — rounded card, horizontally scrolling,
@@ -604,6 +665,16 @@ struct EditorToolbarView: View {
             }
             FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", isActive: coordinator.selectionState.code) {
                 coordinator.execCommand("code")
+            }
+
+            Divider().frame(height: 20)
+
+            // Lists
+            FormatToggleButton(icon: "list.bullet", isActive: coordinator.selectionState.inBulletList) {
+                coordinator.execCommand("bulletList")
+            }
+            FormatToggleButton(icon: "list.number", isActive: coordinator.selectionState.inOrderedList) {
+                coordinator.execCommand("orderedList")
             }
 
             Divider().frame(height: 20)
