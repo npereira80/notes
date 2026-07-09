@@ -496,18 +496,34 @@ final class DatabaseManager {
 
     // MARK: - Resources
 
-    /// Local file:// URL for an already-synced resource, or nil if it hasn't been
-    /// downloaded yet. Used to rewrite Joplin's `:/resourceId` links into something the
-    /// editor's WKWebView can actually load (it already has read access to
-    /// resourcesDirectory via loadFileURL's allowingReadAccessTo — see EditorView).
+    /// URL for an already-synced resource (image src the editor can load), or nil if
+    /// it hasn't been downloaded yet. Used to rewrite Joplin's `:/resourceId` links,
+    /// and (on iOS) also called directly by the two local-image-insertion call sites
+    /// in Notes TN/EditorView.swift, so there's one source of truth for the URL
+    /// format per platform.
+    ///
+    /// Mac: a plain file:// URL — Mac's WKWebView already has read access to
+    /// resourcesDirectory via loadFileURL's allowingReadAccessTo (see EditorView),
+    /// since $HOME happens to cover both the app bundle and Application Support.
+    ///
+    /// iOS: a "notestn://resource/<filename>" URL instead — iOS keeps the app bundle
+    /// and Application Support in separate sandbox containers with no shared
+    /// ancestor, so allowingReadAccessTo can't cover both; a WKURLSchemeHandler
+    /// (ImageResourceSchemeHandler in Notes TN/EditorView.swift) serves this scheme's
+    /// bytes directly instead of relying on file:// access.
     func resourceLocalUrl(id: String) -> String? {
         var filename: String?
         withStatement("SELECT filename FROM resources WHERE id = ?") { stmt in
             bind(stmt, 1, id)
             if sqlite3_step(stmt) == SQLITE_ROW { filename = string(stmt, 0) }
         }
-        guard let filename, let dir = resourcesDirectory else { return nil }
+        guard let filename else { return nil }
+        #if os(iOS)
+        return "notestn://resource/\(filename)"
+        #else
+        guard let dir = resourcesDirectory else { return nil }
         return dir.appendingPathComponent(filename).absoluteString
+        #endif
     }
 
     func resourceExists(id: String) -> Bool {

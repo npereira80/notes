@@ -110,6 +110,12 @@ private struct PadNoteEditorView: View {
                 // Declared after the formatting toolbar above, in the same .toolbar
                 // closure, so it's guaranteed to render to its right:
                 // (formatting toolbar) (search icon).
+                //
+                // .sharedBackgroundVisibility(.hidden) is REQUIRED here — without it
+                // iPadOS visually fuses this icon into the same pill as the
+                // formatting toolbar. Keeping the two visually separate is a hard
+                // requirement (asked for repeatedly) that overrides matching the New
+                // Note button's glass background — do not remove this again.
                 ToolbarItem(placement: .primaryAction) {
                     SearchIconButton(
                         text: Binding(get: { appState.searchText }, set: { appState.search($0) }),
@@ -158,8 +164,14 @@ private struct PadNoteEditorView: View {
             noteId: noteID
         ), dirty: true, synced: false)
 
+        // resourceLocalUrl(id:) emits a "notestn://resource/<filename>" URL on iOS
+        // (see DatabaseManager.swift) rather than a raw file:// path — served by
+        // ImageResourceSchemeHandler (EditorView.swift), since iOS's sandbox keeps
+        // the app bundle and Application Support in separate containers that
+        // allowingReadAccessTo can't both cover.
+        guard let src = DatabaseManager.shared.resourceLocalUrl(id: resourceId) else { return }
         editorCoordinator.insertImage(
-            src: destURL.absoluteString,
+            src: src,
             alt: url.deletingPathExtension().lastPathComponent,
             resourceId: resourceId
         )
@@ -206,36 +218,29 @@ private struct EditorFormatToolbar: View {
     }
 }
 
-// Fixed-width magnifying-glass icon — never grows inline in the toolbar itself, per
-// request. Tapping it opens a popover containing the actual search field; the note
-// list behind still updates live as you type (same appState.search(_:) binding
-// PadNoteListView reads from), and Enter still calls onSubmit (submitSearch()) to
-// open/preview the first result, same as before.
+// Icon-only until tapped, then expands inline (in this same toolbar item's own
+// slot — not merged with the formatting toolbar, see the "keep separate" note at
+// the call sites above) into a capsule text field. Collapses back to the icon once
+// the field loses focus AND is empty, so an active search (non-empty text) stays
+// visibly expanded even if focus moves elsewhere (e.g. tapping into the editor to
+// read a result).
 private struct SearchIconButton: View {
     @Binding var text: String
     var onSubmit: () -> Void
 
-    @State private var isShowingPopover = false
+    @State private var isExpanded = false
     @FocusState private var isFieldFocused: Bool
 
     var body: some View {
-        Button {
-            isShowingPopover = true
-            isFieldFocused = true
-        } label: {
-            Image(systemName: "magnifyingglass")
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $isShowingPopover) {
-            HStack(spacing: 6) {
+        HStack(spacing: 6) {
+            if isExpanded {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Search", text: $text)
                     .focused($isFieldFocused)
                     .submitLabel(.search)
                     .onSubmit(onSubmit)
+                    .frame(width: 180)
                 if !text.isEmpty {
                     Button {
                         text = ""
@@ -245,10 +250,20 @@ private struct SearchIconButton: View {
                     }
                     .buttonStyle(.plain)
                 }
+            } else {
+                Button {
+                    isExpanded = true
+                    isFieldFocused = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
             }
-            .padding(10)
-            .frame(width: 260)
-            .presentationCompactAdaptation(.popover)
+        }
+        .padding(.horizontal, isExpanded ? 10 : 0)
+        .padding(.vertical, isExpanded ? 6 : 0)
+        .background(isExpanded ? Color.gray.opacity(0.15) : Color.clear, in: Capsule())
+        .onChange(of: isFieldFocused) { _, focused in
+            if !focused { isExpanded = false }
         }
     }
 }

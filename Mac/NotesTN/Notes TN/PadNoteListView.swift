@@ -166,6 +166,17 @@ struct PadNoteListView: View {
     // Divider is drawn instead, giving direct control over its inset.
     private let rowIndent: CGFloat = 32
 
+    // Mirrors Apple Notes' list row thumbnail — square, rounded, first image only.
+    // Same 44x44 / 7pt-corner-radius as Mac's NoteListView.swift (NoteRowView), so a
+    // note looks the same across platforms. Uses DatabaseManager.resourceLocalFileURL
+    // (a plain file:// URL for AsyncImage/URLSession, which reads via the app's own
+    // process-level sandbox access — NOT the WKWebView-only restriction that needed
+    // the notestn:// scheme handler for in-editor images) rather than
+    // resourceLocalUrl, so this didn't need any of that fix to already work.
+    private func thumbnailURL(for note: Note) -> URL? {
+        note.firstImageResourceId.flatMap { DatabaseManager.shared.resourceLocalFileURL(id: $0) }
+    }
+
     // Hides a row's own divider (drawn at its bottom, which visually also serves as
     // the row below it's top divider) when either this row or the next row is
     // selected — otherwise the divider would visibly cut across the yellow
@@ -175,26 +186,39 @@ struct PadNoteListView: View {
         let isSelected = appState.selectedNoteID == note.id
         let hideDivider = isSelected || nextNoteIsSelected
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading) {
-                Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(.headline)
-                    .foregroundStyle(isSelected ? .white : .primary)
-                // Timestamp matches the title's color; preview keeps its own
-                // (unchanged) secondary color — set per-segment since they're
-                // concatenated into one Text.
-                Group {
-                    if note.preview.isEmpty {
-                        Text(rowDate(note))
-                            .foregroundColor(isSelected ? .white : .primary)
-                    } else {
-                        Text(rowDate(note))
-                            .foregroundColor(isSelected ? .white : .primary)
-                        + Text("  \(note.preview)")
-                            .foregroundColor(isSelected ? .white : .secondary)
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading) {
+                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                        .font(.headline)
+                        .foregroundStyle(isSelected ? .white : .primary)
+                    // Timestamp matches the title's color; preview keeps its own
+                    // (unchanged) secondary color — set per-segment since they're
+                    // concatenated into one Text.
+                    Group {
+                        if note.preview.isEmpty {
+                            Text(rowDate(note))
+                                .foregroundColor(isSelected ? .white : .primary)
+                        } else {
+                            Text(rowDate(note))
+                                .foregroundColor(isSelected ? .white : .primary)
+                            + Text("  \(note.preview)")
+                                .foregroundColor(isSelected ? .white : .secondary)
+                        }
                     }
+                    .font(.subheadline)
+                    .lineLimit(1)
                 }
-                .font(.subheadline)
-                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let thumbnailURL = thumbnailURL(for: note) {
+                    AsyncImage(url: thumbnailURL) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Color.clear
+                    }
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                }
             }
             .padding(.leading, rowIndent)
             .padding(.trailing, 16)

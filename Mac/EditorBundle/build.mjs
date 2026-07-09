@@ -51,7 +51,11 @@ function writeEditorHtml(outDir) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob:;">
+<!-- img-src includes notestn: — iOS's custom WKURLSchemeHandler scheme (see
+     ImageResourceSchemeHandler in Notes TN/EditorView.swift) for serving image
+     resources from Application Support, since file:// can't cross iOS's sandbox
+     container boundary. Harmless on Mac/Android, which don't use that scheme. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob: notestn:;">
 <script>
   // Runs synchronously during <head> parsing, before first paint, so there's
   // no flash of the wrong theme. Android passes ?theme=dark|light on the

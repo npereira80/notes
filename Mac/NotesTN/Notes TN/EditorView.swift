@@ -183,6 +183,9 @@ struct RichTextEditorView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(coordinator, name: "editorMessage")
+        // Serves "notestn://resource/<filename>" image URLs directly from
+        // DatabaseManager's resourcesDirectory — see ImageResourceSchemeHandler above.
+        config.setURLSchemeHandler(ImageResourceSchemeHandler(), forURLScheme: "notestn")
 
         let wv = WKWebView(frame: .zero, configuration: config)
         // Transparent background — body bg handles color (AppKit's "drawsBackground"
@@ -248,6 +251,45 @@ struct RichTextEditorView: UIViewRepresentable {
         // WKUserContentController holds a strong ref to EditorCoordinator,
         // so we must remove it when the view is destroyed.
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: "editorMessage")
+    }
+}
+
+// MARK: - Image resource scheme handler
+
+/// Serves image bytes for "notestn://resource/<filename>" URLs directly from
+/// DatabaseManager's resourcesDirectory, instead of relying on file:// +
+/// allowingReadAccessTo — which can only grant one directory tree per WKWebView, and
+/// that tree is already spent on the app bundle (see the comment on
+/// RichTextEditorView.makeUIView above). This mirrors Android's approach of serving
+/// resources through a virtual origin (WebViewAssetLoader) rather than raw file://
+/// paths. Registered on the WKWebViewConfiguration in makeUIView below.
+/// DatabaseManager.resourceLocalUrl(id:) is the single place that emits this scheme
+/// (iOS-only branch) — see DatabaseManager.swift.
+final class ImageResourceSchemeHandler: NSObject, WKURLSchemeHandler {
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        guard let url = urlSchemeTask.request.url,
+              let dir = DatabaseManager.shared.resourcesDirectory else {
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+        let filename = url.lastPathComponent
+        let fileURL = dir.appendingPathComponent(filename)
+
+        guard let data = try? Data(contentsOf: fileURL) else {
+            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
+            return
+        }
+
+        let mimeType = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let response = URLResponse(url: url, mimeType: mimeType, expectedContentLength: data.count, textEncodingName: nil)
+        urlSchemeTask.didReceive(response)
+        urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
+        // Reads above are synchronous and already complete by the time this could
+        // fire — nothing to cancel.
     }
 }
 
@@ -520,9 +562,9 @@ struct NoteEditorView: View {
         }
         editorCoordinator.onImageRequested = { dataUri in
             guard let resource = copyDataUriIntoResources(dataUri: dataUri, noteId: noteID),
-                  let dir = DatabaseManager.shared.resourcesDirectory else { return }
+                  let src = DatabaseManager.shared.resourceLocalUrl(id: resource.id) else { return }
             editorCoordinator.insertImage(
-                src: dir.appendingPathComponent(resource.filename).absoluteString,
+                src: src,
                 alt: resource.title,
                 resourceId: resource.id
             )
@@ -565,8 +607,9 @@ struct NoteEditorView: View {
             noteId: noteID
         ), dirty: true, synced: false)
 
+        guard let src = DatabaseManager.shared.resourceLocalUrl(id: resourceId) else { return }
         editorCoordinator.insertImage(
-            src: destURL.absoluteString,
+            src: src,
             alt: url.deletingPathExtension().lastPathComponent,
             resourceId: resourceId
         )
