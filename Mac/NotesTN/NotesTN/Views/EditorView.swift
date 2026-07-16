@@ -10,6 +10,7 @@ struct EditorSelectionState {
     var italic = false
     var code = false
     var strikethrough = false
+    var highlight = false
     var inCode = false
     var inBlockquote = false
     var inBulletList = false
@@ -29,6 +30,14 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     // MARK: Published
     @Published var selectionState = EditorSelectionState()
     @Published var isReady = false
+
+    // The last content this editor is known to hold — written by setContent (what we
+    // pushed in) and by the contentChanged message (what the user typed). Lets
+    // NoteEditorView tell a sync-pulled external change (DB body differs from this →
+    // refresh the editor) from the echo of its own autosave (identical → ignore),
+    // without re-keying/reloading the WKWebView.
+    var lastKnownTitle: String = ""
+    var lastKnownBody: String = ""
 
     // The webview — set by RichTextEditorView.makeNSView
     weak var webView: WKWebView?
@@ -51,7 +60,10 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
         case "contentChanged":
             if let html = body["html"] as? String {
-                onContentChanged?(html)
+                let title = body["title"] as? String ?? ""
+                lastKnownTitle = title
+                lastKnownBody = html
+                onContentChanged?(title, html)
             }
 
         case "selectionChanged":
@@ -61,6 +73,7 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                     italic: s["italic"] as? Bool ?? false,
                     code: s["code"] as? Bool ?? false,
                     strikethrough: s["strikethrough"] as? Bool ?? false,
+                    highlight: s["highlight"] as? Bool ?? false,
                     inCode: s["inCode"] as? Bool ?? false,
                     inBlockquote: s["inBlockquote"] as? Bool ?? false,
                     inBulletList: s["inBulletList"] as? Bool ?? false,
@@ -74,8 +87,11 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
             }
 
         case "imageRequested":
-            // User pasted an image — open the resource picker (handled in NoteEditorView)
-            onImageRequested?()
+            // User pasted an image — JS sends its raw "data:...;base64,..." URI in
+            // `html` (see the paste handler in Mac/EditorBundle/src/index.ts).
+            if let dataUri = body["html"] as? String {
+                onImageRequested?(dataUri)
+            }
 
         case "openUrl":
             if let urlString = body["url"] as? String,
@@ -94,20 +110,24 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     }
 
     // MARK: Callbacks set by NoteEditorView
-    var onContentChanged: ((String) -> Void)?
-    var onImageRequested: (() -> Void)?
+    var onContentChanged: ((String, String) -> Void)?
+    var onImageRequested: ((String) -> Void)?
 
     // MARK: Commands → JS
 
-    func setContent(_ html: String) {
+    func setContent(title: String, body: String) {
         guard let wv = webView else { return }
+        lastKnownTitle = title
+        lastKnownBody = body
         // JSONEncoder handles bare String top-level values safely.
         // NSJSONSerialization throws an ObjC NSException (not a Swift Error) for
         // bare strings, which bypasses try? and corrupts SwiftUI's run loop state,
         // freezing the entire UI after the first note is selected.
-        guard let data = try? JSONEncoder().encode(html),
-              let jsonStr = String(data: data, encoding: .utf8) else { return }
-        wv.evaluateJavaScript("window.NativeEditor?.setContent(\(jsonStr))")
+        guard let titleData = try? JSONEncoder().encode(title),
+              let titleJSON = String(data: titleData, encoding: .utf8),
+              let bodyData = try? JSONEncoder().encode(body),
+              let bodyJSON = String(data: bodyData, encoding: .utf8) else { return }
+        wv.evaluateJavaScript("window.NativeEditor?.setContent(\(titleJSON), \(bodyJSON))")
     }
 
     func execCommand(_ command: String, value: Any? = nil) {
@@ -136,6 +156,34 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         wv.evaluateJavaScript("window.NativeEditor?.focus()")
     }
 
+    // MARK: Native toolbar inset (content flowing under the translucent toolbar)
+
+    /// Pushes the note's content down by `points` inside the WebView's own scrollable
+    /// area (see build.mjs's --native-toolbar-inset), so text
+    /// starts right below the toolbar visually but can still scroll further up
+    /// underneath its translucent material instead of hard-clipping flush against it.
+    /// The WKWebView itself extends full-height under the toolbar (see
+    /// RichTextEditorView's .ignoresSafeArea below) — this is what keeps the *content*
+    /// looking like it starts in the same place it used to.
+    func setTopInset(_ points: CGFloat) {
+        guard let wv = webView else { return }
+        wv.evaluateJavaScript("document.documentElement.style.setProperty('--native-toolbar-inset', '\(points)px')")
+    }
+
+    // MARK: WKNavigationDelegate — content process recovery
+
+    // WebKit can kill the editor page's content process (memory pressure, long
+    // background stretches). Without this, the editor silently turns blank/broken
+    // and stays that way until the app is relaunched. Reloading re-runs the page,
+    // which re-fires the JS "ready" message — isReady flipping back to true makes
+    // NoteEditorView push the current content back in via its onChange(of: isReady).
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MainActor.assumeIsolated {
+            isReady = false
+            webView.reload()
+        }
+    }
+
     // MARK: WKNavigationDelegate — open links in default browser
 
     nonisolated func webView(
@@ -143,13 +191,18 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        if navigationAction.navigationType == .linkActivated,
-           let url = navigationAction.request.url {
-            decisionHandler(.cancel)
-            NSWorkspace.shared.open(url)
-            return
+        // WebKit always calls navigation delegate methods on the main thread, so it's
+        // safe to assume isolation here — navigationAction's properties are main-actor
+        // isolated in the current SDK even though this delegate method itself isn't.
+        MainActor.assumeIsolated {
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                decisionHandler(.cancel)
+                NSWorkspace.shared.open(url)
+                return
+            }
+            decisionHandler(.allow)
         }
-        decisionHandler(.allow)
     }
 
     // MARK: Image insertion
@@ -171,15 +224,21 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 /// Overriding hitTest here ensures only points actually inside this view are handled.
 final class EditorWebView: WKWebView {
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point) else { return nil }
+        // `point` arrives in the superview's coordinate space, not our own — must
+        // convert before comparing against `bounds`, or this check is meaningless
+        // whenever our frame origin isn't (0, 0) in the superview (the normal case).
+        let localPoint = superview?.convert(point, to: self) ?? point
+        guard bounds.contains(localPoint) else { return nil }
         return super.hitTest(point)
     }
 }
+
 
 // MARK: - WKWebView NSViewRepresentable
 
 struct RichTextEditorView: NSViewRepresentable {
     @ObservedObject var coordinator: EditorCoordinator
+    var readOnly: Bool = false
 
     func makeNSView(context: Context) -> EditorWebView {
         let config = WKWebViewConfiguration()
@@ -189,6 +248,11 @@ struct RichTextEditorView: NSViewRepresentable {
         wv.setValue(false, forKey: "drawsBackground") // transparent — body bg handles color
         wv.navigationDelegate = coordinator
         coordinator.webView = wv
+        #if DEBUG
+        // Lets Safari's Develop menu attach to this WKWebView (Develop > [device name] >
+        // NotesTN) for real console errors/breakpoints — debug builds only.
+        if #available(macOS 13.3, *) { wv.isInspectable = true }
+        #endif
 
         // Load editor.html from the app bundle.
         // allowingReadAccessTo must cover BOTH the bundle directory (editor.html,
@@ -197,7 +261,13 @@ struct RichTextEditorView: NSViewRepresentable {
         // debug builds (bundle is under ~/Library/Developer/Xcode/DerivedData).
         if let htmlURL = Bundle.main.url(forResource: "editor", withExtension: "html", subdirectory: nil) {
             let accessRoot = FileManager.default.homeDirectoryForCurrentUser
-            wv.loadFileURL(htmlURL, allowingReadAccessTo: accessRoot)
+            // ?readonly=1 disables ProseMirror's contentEditable entirely for a trashed
+            // note opened from Trash — see EditorBundle/src/index.ts. Appended via
+            // URLComponents since htmlURL is a file:// URL (query strings are still
+            // valid there and WKWebView preserves them for location.search).
+            var components = URLComponents(url: htmlURL, resolvingAgainstBaseURL: false)
+            if readOnly { components?.queryItems = [URLQueryItem(name: "readonly", value: "1")] }
+            wv.loadFileURL(components?.url ?? htmlURL, allowingReadAccessTo: accessRoot)
         } else {
             let fallback = "<html><body><p style='color:red'>editor.html not found in bundle</p></body></html>"
             wv.loadHTMLString(fallback, baseURL: nil)
@@ -226,7 +296,7 @@ struct EditorView: View {
     var body: some View {
         Group {
             if let note = appState.selectedNote {
-                NoteEditorView(note: note)
+                NoteEditorView(note: note, readOnly: appState.isTrashSelected)
                     .id(note.id)
             } else {
                 emptyState
@@ -243,6 +313,7 @@ struct EditorView: View {
                 .foregroundStyle(.secondary)
             Button("New Note") { appState.createNote() }
                 .keyboardShortcut("n", modifiers: .command)
+                .tint(Color.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.windowBackground)
@@ -255,64 +326,128 @@ struct NoteEditorView: View {
     @EnvironmentObject var appState: AppState
 
     @StateObject private var editorCoordinator = EditorCoordinator()
-    @State private var title: String
     @State private var isShowingImagePicker = false
+    @State private var showPermanentDeleteConfirm = false
+    // Captured below (see the GeometryReader background) from the safe area the
+    // native window toolbar reserves — pushed into the WebView's own content via
+    // editorCoordinator.setTopInset so it can flow its full height underneath the
+    // toolbar's translucent material instead of hard-clipping flush against it.
+    @State private var toolbarInset: CGFloat = 0
     private let noteID: String
+    private let initialTitle: String
     private let initialBody: String
-    private let saveDebounce = Debouncer(delay: 0.5)
+    private let readOnly: Bool
 
-    init(note: Note) {
+    init(note: Note, readOnly: Bool = false) {
         self.noteID = note.id
+        self.initialTitle = note.title
         self.initialBody = note.body
-        _title = State(initialValue: note.title)
+        self.readOnly = readOnly
     }
 
     var body: some View {
         VStack(spacing: 0) {
 
             // MARK: Toolbar
-            EditorToolbarView(
-                coordinator: editorCoordinator,
-                onInsertImage: { isShowingImagePicker = true }
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 11)
-            .background(.windowBackground)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 0) {
-                // Title
-                TextField("Title", text: $title)
-                    .font(.system(size: 22, weight: .bold))
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 20)
-                    .padding(.bottom, 8)
-                    .onChange(of: title) { _, _ in schedulesTitleSave() }
-                    .onSubmit { editorCoordinator.focus() }
-
-                // Rich text editor (WKWebView)
-                RichTextEditorView(coordinator: editorCoordinator)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // A trashed note is read-only until restored — Restore/Delete Permanently
+            // replace the formatting toolbar entirely instead of sitting alongside it.
+            // The formatting toolbar itself now lives in the native window toolbar
+            // (see .toolbar below) instead of this content row, so it renders on the
+            // same line as NoteListView's search field / New Note button.
+            if readOnly {
+                HStack {
+                    Spacer()
+                    Button("Restore") {
+                        guard let note = trashedNote else { return }
+                        appState.restoreNote(note)
+                    }
+                    Button("Delete Permanently", role: .destructive) { showPermanentDeleteConfirm = true }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(.windowBackground)
             }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Title now lives inside the shared ProseMirror doc (see
+            // Mac/EditorBundle's `pm-title` node), so it scrolls together with
+            // the body instead of sitting in a separate native field above it.
+            // .ignoresSafeArea lets this extend its full height underneath the native
+            // toolbar's translucent material — toolbarInset (captured below) tells the
+            // WebView's own content to leave the same visual gap it used to via CSS
+            // padding instead, so text still starts in the same place but can keep
+            // scrolling up underneath the toolbar instead of hard-clipping against it.
+            RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(edges: .top)
+        }
+        .background(
+            // Reads the safe area the native toolbar reserves — measured on this
+            // (non-ignoring) VStack, not on RichTextEditorView itself, since a view
+            // that's ignoring a safe area no longer reports an inset for that edge.
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { toolbarInset = proxy.safeAreaInsets.top }
+                    .onChange(of: proxy.safeAreaInsets.top) { _, newValue in toolbarInset = newValue }
+            }
+        )
+        .onChange(of: toolbarInset) { _, newValue in editorCoordinator.setTopInset(newValue) }
+        .onChange(of: editorCoordinator.isReady) { _, ready in
+            // The CSS variable lives on the page itself, so a fresh page load (or
+            // switching notes, which re-keys this whole view — see NotesNavHost)
+            // starts back at the default 0px until we push the current value again.
+            if ready { editorCoordinator.setTopInset(toolbarInset) }
         }
         .background(.windowBackground)
         .toolbar {
-            ToolbarItem(placement: .destructiveAction) {
-                Button { appState.createNote() } label: {
-                    Image(systemName: "square.and.pencil")
+            // Merges into the same native window toolbar as NoteListView's search
+            // field / New Note button (NavigationSplitView combines .toolbar content
+            // from every visible column into one bar) — not shown for a read-only
+            // (trashed) note, which uses Restore/Delete Permanently instead.
+            if !readOnly {
+                ToolbarItem(placement: .primaryAction) {
+                    EditorToolbarView(
+                        coordinator: editorCoordinator,
+                        onInsertImage: { isShowingImagePicker = true }
+                    )
                 }
-                .help("New Note (⌘N)")
             }
+        }
+        .confirmationDialog(
+            "Permanently delete this note?",
+            isPresented: $showPermanentDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                guard let note = trashedNote else { return }
+                appState.permanentlyDeleteNote(note)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
         }
         .onAppear {
             setupCallbacks()
         }
         .onChange(of: editorCoordinator.isReady) { _, ready in
-            if ready { editorCoordinator.setContent(initialBody) }
+            // Reads the note fresh from AppState (falling back to the values captured
+            // at init) — isReady also re-fires after a content-process-terminate
+            // reload (see EditorCoordinator.webViewWebContentProcessDidTerminate),
+            // by which time the init-time snapshot may be stale.
+            guard ready else { return }
+            let note = currentNote
+            editorCoordinator.setContent(title: note?.title ?? initialTitle, body: note?.body ?? initialBody)
+        }
+        // A sync pull that updates the currently open note used to leave the editor
+        // showing the old content (it was only ever set once per note id) — the list
+        // preview and the editor would disagree until the note was reopened or the
+        // app relaunched, and the next autosave would overwrite the pulled remote
+        // edit with the stale editor content. lastKnown* filtering keeps this from
+        // reacting to the echo of the editor's own autosaves.
+        .onChange(of: currentNote?.updatedTime) { _, _ in
+            guard editorCoordinator.isReady, let note = currentNote else { return }
+            if note.title != editorCoordinator.lastKnownTitle || note.body != editorCoordinator.lastKnownBody {
+                editorCoordinator.setContent(title: note.title, body: note.body)
+            }
         }
         // Image picker
         .fileImporter(
@@ -324,29 +459,43 @@ struct NoteEditorView: View {
         }
     }
 
+    private var trashedNote: Note? {
+        appState.trashedNotes.first { $0.id == noteID }
+    }
+
+    /// The freshest copy of this view's note in AppState (live or trashed) — the
+    /// init-time title/body snapshot goes stale as soon as the user types or a sync
+    /// pulls a newer version.
+    private var currentNote: Note? {
+        appState.notes.first { $0.id == noteID } ?? trashedNote
+    }
+
     // MARK: Setup
 
     private func setupCallbacks() {
-        editorCoordinator.onContentChanged = { html in
-            guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
-            var updated = note
+        // Title now arrives from the same combined callback as the body (see
+        // Mac/EditorBundle's `pm-title` node) — one save path instead of the old
+        // separate immediate-body-save / debounced-title-save paths.
+        editorCoordinator.onContentChanged = { title, html in
+            // Falls back to the DB copy when the note isn't in appState.notes — it can
+            // legitimately be missing (e.g. an active search whose results no longer
+            // include it after this very edit); returning here silently dropped the
+            // user's keystrokes.
+            guard var updated = self.appState.notes.first(where: { $0.id == self.noteID })
+                ?? DatabaseManager.shared.fetchNote(id: self.noteID) else { return }
+            updated.title = title
             updated.body = html
-            updated.title = self.title
             self.appState.saveNote(updated)
         }
-        editorCoordinator.onImageRequested = {
-            isShowingImagePicker = true
-        }
-    }
-
-    // MARK: Save
-
-    private func schedulesTitleSave() {
-        saveDebounce.call {
-            guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
-            var updated = note
-            updated.title = self.title
-            self.appState.saveNote(updated)
+        editorCoordinator.onImageRequested = { dataUri in
+            guard let resource = copyDataUriIntoResources(dataUri: dataUri, noteId: noteID),
+                  let dir = DatabaseManager.shared.resourcesDirectory else { return }
+            // file:// URL that WKWebView can load (local access granted via loadFileURL)
+            editorCoordinator.insertImage(
+                src: dir.appendingPathComponent(resource.filename).absoluteString,
+                alt: resource.title,
+                resourceId: resource.id
+            )
         }
     }
 
@@ -370,6 +519,8 @@ struct NoteEditorView: View {
 
         // Save to DB and insert into editor
         let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "image/png"
+        // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
+        // synced since the server doesn't know about it.
         DatabaseManager.shared.saveResource(Resource(
             id: resourceId,
             title: url.lastPathComponent,
@@ -377,7 +528,7 @@ struct NoteEditorView: View {
             filename: "\(resourceId).\(ext)",
             fileSize: (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0,
             noteId: noteID
-        ))
+        ), dirty: true, synced: false)
 
         // file:// URL that WKWebView can load (local access granted via loadFileURL)
         editorCoordinator.insertImage(
@@ -386,6 +537,43 @@ struct NoteEditorView: View {
             resourceId: resourceId
         )
     }
+
+    /// Counterpart to handleImagePick for the paste-from-clipboard path — the editor
+    /// bundle hands us a raw "data:image/png;base64,..." URI (see the paste handler in
+    /// Mac/EditorBundle/src/index.ts) instead of a picked file URL, since there's no
+    /// system picker involved.
+    private func copyDataUriIntoResources(dataUri: String, noteId: String) -> Resource? {
+        guard let commaIndex = dataUri.firstIndex(of: ","),
+              let dir = DatabaseManager.shared.resourcesDirectory else { return nil }
+
+        let header = dataUri[dataUri.index(dataUri.startIndex, offsetBy: "data:".count)..<commaIndex]
+        let mimeType = String(header.split(separator: ";").first ?? "image/png")
+        let base64 = String(dataUri[dataUri.index(after: commaIndex)...])
+        guard let bytes = Data(base64Encoded: base64) else { return nil }
+
+        let ext = UTType(mimeType: mimeType)?.preferredFilenameExtension ?? "png"
+        let resourceId = Note.generateId()
+        let filename = "\(resourceId).\(ext)"
+        do {
+            try bytes.write(to: dir.appendingPathComponent(filename))
+        } catch {
+            print("[Editor] Failed to write pasted image: \(error)")
+            return nil
+        }
+
+        let resource = Resource(
+            id: resourceId,
+            title: filename,
+            mimeType: mimeType,
+            filename: filename,
+            fileSize: bytes.count,
+            noteId: noteId
+        )
+        // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
+        // synced since the server doesn't know about it.
+        DatabaseManager.shared.saveResource(resource, dirty: true, synced: false)
+        return resource
+    }
 }
 
 // MARK: - Toolbar
@@ -393,27 +581,47 @@ struct NoteEditorView: View {
 struct EditorToolbarView: View {
     @ObservedObject var coordinator: EditorCoordinator
     var onInsertImage: () -> Void
+    @State private var showMarkdownSource = false
 
     var body: some View {
-        HStack(spacing: 2) {
-            // Paragraph / Headings picker
+        HStack(spacing: 8) {
+            // Text style picker
             Menu {
+                // "Title" reuses heading level 1 (restyled in CSS to match the note
+                // title's look) so it can be applied to any paragraph in the body.
+                Button("Title") { coordinator.execCommand("heading1") }
+                Button("Heading") { coordinator.execCommand("heading3") }
+                Button("Subheading") { coordinator.execCommand("heading4") }
                 Button("Paragraph") { coordinator.execCommand("paragraph") }
                 Divider()
-                ForEach(1...6, id: \.self) { level in
-                    Button("Heading \(level)") { coordinator.execCommand("heading\(level)") }
-                }
+                Button("Bullet List") { coordinator.execCommand("bulletList") }
+                Button("Number List") { coordinator.execCommand("orderedList") }
                 Divider()
+                Button("Monospaced") { coordinator.execCommand("code") }
                 Button("Code Block") { coordinator.execCommand("codeBlock") }
             } label: {
+                // .imageScale(.large) instead of a fixed point size/frame — lets AppKit
+                // size the icon to the native toolbar's own max comfortable height
+                // instead of us guessing a value that could get clipped by the
+                // toolbar's fixed row height.
                 Image(systemName: "textformat")
-                    .frame(width: 26, height: 22)
+                    .imageScale(.large)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 36)
+            .padding(.leading, 8)
 
-            Divider().frame(height: 16)
+            Divider()
+
+            // Task list + Insert Image — moved up front (2nd/3rd items), per request
+            FormatToggleButton(icon: "checklist", tooltip: "Task List", isActive: coordinator.selectionState.inTaskList) {
+                coordinator.execCommand("taskList")
+            }
+            FormatButton(icon: "photo", tooltip: "Insert Image") {
+                onInsertImage()
+            }
+
+            Divider()
 
             // Inline marks
             FormatToggleButton(icon: "bold", tooltip: "Bold (⌘B)", isActive: coordinator.selectionState.bold) {
@@ -425,31 +633,31 @@ struct EditorToolbarView: View {
             FormatToggleButton(icon: "strikethrough", tooltip: "Strikethrough", isActive: coordinator.selectionState.strikethrough) {
                 coordinator.execCommand("strikethrough")
             }
+            FormatToggleButton(icon: "highlighter", tooltip: "Highlight", isActive: coordinator.selectionState.highlight) {
+                coordinator.execCommand("highlight")
+            }
             FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", tooltip: "Inline Code (⌘`)", isActive: coordinator.selectionState.code) {
                 coordinator.execCommand("code")
             }
 
-            Divider().frame(height: 16)
+            Divider()
+
+            // Lists
+            FormatToggleButton(icon: "list.bullet", tooltip: "Bullet List", isActive: coordinator.selectionState.inBulletList) {
+                coordinator.execCommand("bulletList")
+            }
+            FormatToggleButton(icon: "list.number", tooltip: "Number List", isActive: coordinator.selectionState.inOrderedList) {
+                coordinator.execCommand("orderedList")
+            }
+
+            Divider()
 
             // Block formatting
             FormatToggleButton(icon: "quote.opening", tooltip: "Blockquote", isActive: coordinator.selectionState.inBlockquote) {
                 coordinator.execCommand("blockquote")
             }
 
-            Divider().frame(height: 16)
-
-            // Lists
-            FormatToggleButton(icon: "list.bullet", tooltip: "Bullet List", isActive: coordinator.selectionState.inBulletList) {
-                coordinator.execCommand("bulletList")
-            }
-            FormatToggleButton(icon: "list.number", tooltip: "Numbered List", isActive: coordinator.selectionState.inOrderedList) {
-                coordinator.execCommand("orderedList")
-            }
-            FormatToggleButton(icon: "checklist", tooltip: "Task List", isActive: coordinator.selectionState.inTaskList) {
-                coordinator.execCommand("taskList")
-            }
-
-            Divider().frame(height: 16)
+            Divider()
 
             // Indent / outdent
             FormatButton(icon: "decrease.indent", tooltip: "Outdent (⇧Tab)") {
@@ -459,23 +667,17 @@ struct EditorToolbarView: View {
                 coordinator.execCommand("indent")
             }
 
-            Divider().frame(height: 16)
+            Divider()
 
-            // Insert
-            FormatButton(icon: "photo", tooltip: "Insert Image") {
-                onInsertImage()
-            }
+            // Insert (image moved above; table/HR remain)
             FormatButton(icon: "tablecells", tooltip: "Insert Table") {
                 coordinator.execCommand("table", value: ["rows": 3, "cols": 3])
             }
             FormatButton(icon: "minus", tooltip: "Horizontal Rule") {
                 coordinator.execCommand("horizontalRule")
             }
-            FormatButton(icon: "arrowtriangle.right.square", tooltip: "Toggle Block") {
-                coordinator.execCommand("toggle")
-            }
 
-            Divider().frame(height: 16)
+            Divider()
 
             // Link
             FormatToggleButton(icon: "link", tooltip: "Insert Link", isActive: coordinator.selectionState.hasLink) {
@@ -487,17 +689,20 @@ struct EditorToolbarView: View {
                 }
             }
 
-            Spacer()
+            Divider()
 
-            // Undo/redo
-            FormatButton(icon: "arrow.uturn.backward", tooltip: "Undo (⌘Z)") {
-                coordinator.execCommand("undo")
+            // Debugging aid — view the Joplin Markdown the current editor HTML converts
+            // to (the format actually stored/synced), so an HTML rendering bug can be
+            // traced to its Markdown source.
+            FormatButton(icon: "doc.plaintext", tooltip: "View Markdown Source") {
+                showMarkdownSource = true
             }
-            FormatButton(icon: "arrow.uturn.forward", tooltip: "Redo (⌘⇧Z)") {
-                coordinator.execCommand("redo")
-            }
+            .padding(.trailing, 8)
         }
         .contentShape(Rectangle())  // entire toolbar row is event-opaque; gaps between buttons don't fall through
+        .sheet(isPresented: $showMarkdownSource) {
+            MarkdownSourceView(markdown: HtmlToMarkdown.convert(coordinator.lastKnownBody))
+        }
     }
 
     private func showLinkInput() {
@@ -531,9 +736,12 @@ struct FormatButton: View {
 
     var body: some View {
         Button(action: action) {
+            // .imageScale(.large) instead of a fixed point size/frame — matches the
+            // text-style menu icon above: lets AppKit size this to the native
+            // toolbar's own max comfortable height rather than a guessed value that
+            // could get clipped by the toolbar's fixed row height.
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .frame(width: 26, height: 22)
+                .imageScale(.large)
                 .contentShape(Rectangle())  // full frame is clickable, not just icon pixels
         }
         .buttonStyle(.borderless)
@@ -551,8 +759,8 @@ struct FormatToggleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .frame(width: 26, height: 22)
+                .imageScale(.large)
+                .padding(4)
                 .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
                 .cornerRadius(4)
                 .contentShape(Rectangle())  // full frame is clickable
@@ -563,19 +771,38 @@ struct FormatToggleButton: View {
     }
 }
 
-// MARK: - Debouncer
+// MARK: - Markdown source viewer
 
-final class Debouncer {
-    private let delay: TimeInterval
-    private var workItem: DispatchWorkItem?
+/// Read-only view of a note's Markdown source (what HtmlToMarkdown produces from the
+/// current editor HTML). A debugging aid for tracing HTML rendering issues back to
+/// their stored/synced Markdown.
+private struct MarkdownSourceView: View {
+    let markdown: String
+    @Environment(\.dismiss) private var dismiss
 
-    init(delay: TimeInterval) { self.delay = delay }
-
-    func call(action: @escaping () -> Void) {
-        workItem?.cancel()
-        let item = DispatchWorkItem(block: action)
-        workItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Markdown Source").font(.headline)
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(markdown, forType: .string)
+                }
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            Divider()
+            ScrollView {
+                Text(markdown.isEmpty ? "(empty)" : markdown)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+        }
+        .frame(width: 540, height: 480)
     }
 }
 

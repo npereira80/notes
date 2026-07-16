@@ -3,44 +3,95 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		171055DB880340CCA014A43D /* editor.bundle.js in Resources */ = {isa = PBXBuildFile; fileRef = E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */; };
+		1B6F6311F57843BFAD49C432 /* MarkdownToHtml.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0D0D0D0D0D0D0D0D0D0D0D /* MarkdownToHtml.swift */; };
+		1CA7D9173A7E46FF843A6C6F /* JoplinSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0F0F0F0F0F0F0F0F0F0F0F /* JoplinSyncEngine.swift */; };
+		269F994037A4472E97F09AF6 /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B8C9D0E1F2A3B4C5D6E7F8 /* Folder.swift */; };
+		28896BA2C49B429694778DD1 /* JoplinItemSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = G6A6A6A6A6A6A6A6A6A6A6A6 /* JoplinItemSerializer.swift */; };
+		2BE5258D6B71446CBF4D9803 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A6A6A6A6A6A6A6A6A6A6A6 /* LoginView.swift */; };
+		320C7FBBE6174F4E8228443E /* JoplinCloudApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A2A2A2A2A2A2A2A2A2A2A2 /* JoplinCloudApi.swift */; };
+		40DA9FCA7C724376B303AF19 /* Resource.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8A9B0C1D2E3F4A5B6C7D8 /* Resource.swift */; };
+		487AF401AF3B41838E9D68F3 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B7C8D9E0F1A2 /* AppState.swift */; };
+		4DEB03E8DD454A80B6A8F449 /* AppColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */; };
+		631F5824E8C64C15B87DF739 /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B6C7D8E9F0A1B2C3D4E5F6 /* Note.swift */; };
+		78108E5C2C344AA0B293B763 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5E6F7A8B9C0D1E2F3A4 /* SidebarView.swift */; };
+		899C6F96014F401CA4CA4296 /* NotesTNApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* NotesTNApp.swift */; };
 		A2B3C4D5E6F7A8B9C0D1E2F3 /* NotesTNApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* NotesTNApp.swift */; };
 		A4B5C6D7E8F9A0B1C2D3E4F5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3B4C5D6E7F8A9B0C1D2E3F4 /* ContentView.swift */; };
 		A6B7C8D9E0F1A2B3C4D5E6F7 /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B6C7D8E9F0A1B2C3D4E5F6 /* Note.swift */; };
 		A8B9C0D1E2F3A4B5C6D7E8F9 /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B8C9D0E1F2A3B4C5D6E7F8 /* Folder.swift */; };
+		A931CF2E26604E45AB5D3BEA /* JoplinAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A4A4A4A4A4A4A4A4A4A4A4 /* JoplinAccountStore.swift */; };
+		ACDC4D0956034170849C708D /* JoplinItemParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0B0B0B0B0B0B0B0B0B0B0B /* JoplinItemParser.swift */; };
 		B0C1D2E3F4A5B6C7D8E9F0A1 /* DatabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B0C1D2E3F4A5B6C7D8E9F0 /* DatabaseManager.swift */; };
 		B2C3D4E5F6A7B8C9D0E1F2A3 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B7C8D9E0F1A2 /* AppState.swift */; };
 		B4C5D6E7F8A9B0C1D2E3F4A5 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5E6F7A8B9C0D1E2F3A4 /* SidebarView.swift */; };
 		B6C7D8E9F0A1B2C3D4E5F6A7 /* NoteListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C6D7E8F9A0B1C2D3E4F5A6 /* NoteListView.swift */; };
 		B8C9D0E1F2A3B4C5D6E7F8A9 /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C8D9E0F1A2B3C4D5E6F7A8 /* EditorView.swift */; };
 		C0D1E2F3A4B5C6D7E8F9A0B1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B9C0D1E2F3A4B5C6D7E8F9A0 /* Assets.xcassets */; };
+		C70A4B2ABD6D44FEBECF0668 /* editor.html in Resources */ = {isa = PBXBuildFile; fileRef = E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */; };
+		CEC2D623AD9949DC80033308 /* MiniHtmlParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = G2A2A2A2A2A2A2A2A2A2A2A2 /* MiniHtmlParser.swift */; };
 		E3F4A5B6C7D8E9F0A1B2C3D4 /* editor.html in Resources */ = {isa = PBXBuildFile; fileRef = E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */; };
 		E4F5A6B7C8D9E0F1A2B3C4D5 /* editor.bundle.js in Resources */ = {isa = PBXBuildFile; fileRef = E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */; };
 		E6F7A8B9C0D1E2F3A4B5C6D7 /* Resource.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8A9B0C1D2E3F4A5B6C7D8 /* Resource.swift */; };
+		F1A1A1A1A1A1A1A1A1A1A1A1 /* JoplinCloudApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A2A2A2A2A2A2A2A2A2A2A2 /* JoplinCloudApi.swift */; };
+		F3A3A3A3A3A3A3A3A3A3A3A3 /* JoplinAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A4A4A4A4A4A4A4A4A4A4A4 /* JoplinAccountStore.swift */; };
+		F5A5A5A5A5A5A5A5A5A5A5A5 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A6A6A6A6A6A6A6A6A6A6A6 /* LoginView.swift */; };
+		F60322F2CC8B462EB8228ADE /* DatabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B0C1D2E3F4A5B6C7D8E9F0 /* DatabaseManager.swift */; };
+		FA0A0A0A0A0A0A0A0A0A0A0A /* JoplinItemParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0B0B0B0B0B0B0B0B0B0B0B /* JoplinItemParser.swift */; };
+		FB89282D873445628BFEDAB2 /* HtmlToMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = G4A4A4A4A4A4A4A4A4A4A4A4 /* HtmlToMarkdown.swift */; };
+		FC0C0C0C0C0C0C0C0C0C0C0C /* MarkdownToHtml.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0D0D0D0D0D0D0D0D0D0D0D /* MarkdownToHtml.swift */; };
+		FE0E0E0E0E0E0E0E0E0E0E0E /* JoplinSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0F0F0F0F0F0F0F0F0F0F0F /* JoplinSyncEngine.swift */; };
+		G1A1A1A1A1A1A1A1A1A1A1A1 /* MiniHtmlParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = G2A2A2A2A2A2A2A2A2A2A2A2 /* MiniHtmlParser.swift */; };
+		G3A3A3A3A3A3A3A3A3A3A3A3 /* HtmlToMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = G4A4A4A4A4A4A4A4A4A4A4A4 /* HtmlToMarkdown.swift */; };
+		G5A5A5A5A5A5A5A5A5A5A5A5 /* JoplinItemSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = G6A6A6A6A6A6A6A6A6A6A6A6 /* JoplinItemSerializer.swift */; };
+		H1A1A1A1A1A1A1A1A1A1A1A1 /* AppColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		528CAEB82FFDBAF6002F661C /* Notes TN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Notes TN.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* NotesTNApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesTNApp.swift; sourceTree = "<group>"; };
 		A3B4C5D6E7F8A9B0C1D2E3F4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A5B6C7D8E9F0A1B2C3D4E5F6 /* Note.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Note.swift; sourceTree = "<group>"; };
 		A7B8C9D0E1F2A3B4C5D6E7F8 /* Folder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Folder.swift; sourceTree = "<group>"; };
 		A9B0C1D2E3F4A5B6C7D8E9F0 /* DatabaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseManager.swift; sourceTree = "<group>"; };
 		B1C2D3E4F5A6B7C8D9E0F1A2 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
-		E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = editor.html; sourceTree = "<group>"; };
-		E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = editor.bundle.js; sourceTree = "<group>"; };
-		E7F8A9B0C1D2E3F4A5B6C7D8 /* Resource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resource.swift; sourceTree = "<group>"; };
 		B3C4D5E6F7A8B9C0D1E2F3A4 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		B5C6D7E8F9A0B1C2D3E4F5A6 /* NoteListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListView.swift; sourceTree = "<group>"; };
 		B7C8D9E0F1A2B3C4D5E6F7A8 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		B9C0D1E2F3A4B5C6D7E8F9A0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C1D2E3F4A5B6C7D8E9F0A1B2 /* NotesTN.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotesTN.entitlements; sourceTree = "<group>"; };
 		C9D0E1F2A3B4C5D6E7F8A9B0 /* NotesTN.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotesTN.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = editor.html; sourceTree = "<group>"; };
+		E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = editor.bundle.js; sourceTree = "<group>"; };
+		E7F8A9B0C1D2E3F4A5B6C7D8 /* Resource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resource.swift; sourceTree = "<group>"; };
+		F2A2A2A2A2A2A2A2A2A2A2A2 /* JoplinCloudApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinCloudApi.swift; sourceTree = "<group>"; };
+		F4A4A4A4A4A4A4A4A4A4A4A4 /* JoplinAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinAccountStore.swift; sourceTree = "<group>"; };
+		F6A6A6A6A6A6A6A6A6A6A6A6 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		FB0B0B0B0B0B0B0B0B0B0B0B /* JoplinItemParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinItemParser.swift; sourceTree = "<group>"; };
+		FD0D0D0D0D0D0D0D0D0D0D0D /* MarkdownToHtml.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownToHtml.swift; sourceTree = "<group>"; };
+		FF0F0F0F0F0F0F0F0F0F0F0F /* JoplinSyncEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinSyncEngine.swift; sourceTree = "<group>"; };
+		G2A2A2A2A2A2A2A2A2A2A2A2 /* MiniHtmlParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniHtmlParser.swift; sourceTree = "<group>"; };
+		G4A4A4A4A4A4A4A4A4A4A4A4 /* HtmlToMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HtmlToMarkdown.swift; sourceTree = "<group>"; };
+		G6A6A6A6A6A6A6A6A6A6A6A6 /* JoplinItemSerializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoplinItemSerializer.swift; sourceTree = "<group>"; };
+		H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColors.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		528CAEB92FFDBAF6002F661C /* Notes TN */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = "Notes TN"; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		528CAEB52FFDBAF6002F661C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D2E3F4A5B6C7D8E9F0A1B2C3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -51,10 +102,11 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		C2D3E4F5A6B7C8D9E0F1A2B3 /* Main */ = {
+		C2D3E4F5A6B7C8D9E0F1A2B3 = {
 			isa = PBXGroup;
 			children = (
 				C4D5E6F7A8B9C0D1E2F3A4B5 /* NotesTN */,
+				528CAEB92FFDBAF6002F661C /* Notes TN */,
 				C3D4E5F6A7B8C9D0E1F2A3B4 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -63,6 +115,7 @@
 			isa = PBXGroup;
 			children = (
 				C9D0E1F2A3B4C5D6E7F8A9B0 /* NotesTN.app */,
+				528CAEB82FFDBAF6002F661C /* Notes TN.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -71,25 +124,18 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* NotesTNApp.swift */,
+				H2A2A2A2A2A2A2A2A2A2A2A2 /* AppColors.swift */,
 				A3B4C5D6E7F8A9B0C1D2E3F4 /* ContentView.swift */,
 				C5D6E7F8A9B0C1D2E3F4A5B6 /* Models */,
 				C6D7E8F9A0B1C2D3E4F5A6B7 /* Database */,
 				C7D8E9F0A1B2C3D4E5F6A7B8 /* ViewModels */,
 				C8D9E0F1A2B3C4D5E6F7A8B9 /* Views */,
+				F7A7A7A7A7A7A7A7A7A7A7A7 /* Sync */,
 				E5F6A7B8C9D0E1F2A3B4C5D6 /* Editor */,
 				B9C0D1E2F3A4B5C6D7E8F9A0 /* Assets.xcassets */,
 				C1D2E3F4A5B6C7D8E9F0A1B2 /* NotesTN.entitlements */,
 			);
 			path = NotesTN;
-			sourceTree = "<group>";
-		};
-		E5F6A7B8C9D0E1F2A3B4C5D6 /* Editor */ = {
-			isa = PBXGroup;
-			children = (
-				E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */,
-				E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */,
-			);
-			path = Editor;
 			sourceTree = "<group>";
 		};
 		C5D6E7F8A9B0C1D2E3F4A5B6 /* Models */ = {
@@ -124,13 +170,60 @@
 				B3C4D5E6F7A8B9C0D1E2F3A4 /* SidebarView.swift */,
 				B5C6D7E8F9A0B1C2D3E4F5A6 /* NoteListView.swift */,
 				B7C8D9E0F1A2B3C4D5E6F7A8 /* EditorView.swift */,
+				F6A6A6A6A6A6A6A6A6A6A6A6 /* LoginView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		E5F6A7B8C9D0E1F2A3B4C5D6 /* Editor */ = {
+			isa = PBXGroup;
+			children = (
+				E1F2A3B4C5D6E7F8A9B0C1D2 /* editor.html */,
+				E2F3A4B5C6D7E8F9A0B1C2D3 /* editor.bundle.js */,
+			);
+			path = Editor;
+			sourceTree = "<group>";
+		};
+		F7A7A7A7A7A7A7A7A7A7A7A7 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				F2A2A2A2A2A2A2A2A2A2A2A2 /* JoplinCloudApi.swift */,
+				F4A4A4A4A4A4A4A4A4A4A4A4 /* JoplinAccountStore.swift */,
+				FB0B0B0B0B0B0B0B0B0B0B0B /* JoplinItemParser.swift */,
+				FD0D0D0D0D0D0D0D0D0D0D0D /* MarkdownToHtml.swift */,
+				FF0F0F0F0F0F0F0F0F0F0F0F /* JoplinSyncEngine.swift */,
+				G2A2A2A2A2A2A2A2A2A2A2A2 /* MiniHtmlParser.swift */,
+				G4A4A4A4A4A4A4A4A4A4A4A4 /* HtmlToMarkdown.swift */,
+				G6A6A6A6A6A6A6A6A6A6A6A6 /* JoplinItemSerializer.swift */,
+			);
+			path = Sync;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		528CAEB72FFDBAF6002F661C /* Notes TN */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 528CAEC52FFDBAF7002F661C /* Build configuration list for PBXNativeTarget "Notes TN" */;
+			buildPhases = (
+				528CAEB42FFDBAF6002F661C /* Sources */,
+				528CAEB52FFDBAF6002F661C /* Frameworks */,
+				528CAEB62FFDBAF6002F661C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				528CAEB92FFDBAF6002F661C /* Notes TN */,
+			);
+			name = "Notes TN";
+			packageProductDependencies = (
+			);
+			productName = "Notes TN";
+			productReference = 528CAEB82FFDBAF6002F661C /* Notes TN.app */;
+			productType = "com.apple.product-type.application";
+		};
 		D0E1F2A3B4C5D6E7F8A9B0C1 /* NotesTN */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = D6E7F8A9B0C1D2E3F4A5B6C7 /* Build configuration list for PBXNativeTarget "NotesTN" */;
@@ -155,9 +248,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1500;
+				LastSwiftUpdateCheck = 2660;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
+					528CAEB72FFDBAF6002F661C = {
+						CreatedOnToolsVersion = 26.6;
+					};
 					D0E1F2A3B4C5D6E7F8A9B0C1 = {
 						CreatedOnToolsVersion = 15.0;
 					};
@@ -177,11 +273,21 @@
 			projectRoot = "";
 			targets = (
 				D0E1F2A3B4C5D6E7F8A9B0C1 /* NotesTN */,
+				528CAEB72FFDBAF6002F661C /* Notes TN */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		528CAEB62FFDBAF6002F661C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C70A4B2ABD6D44FEBECF0668 /* editor.html in Resources */,
+				171055DB880340CCA014A43D /* editor.bundle.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D3E4F5A6B7C8D9E0F1A2B3C4 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -195,11 +301,36 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		528CAEB42FFDBAF6002F661C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				899C6F96014F401CA4CA4296 /* NotesTNApp.swift in Sources */,
+				4DEB03E8DD454A80B6A8F449 /* AppColors.swift in Sources */,
+				631F5824E8C64C15B87DF739 /* Note.swift in Sources */,
+				269F994037A4472E97F09AF6 /* Folder.swift in Sources */,
+				40DA9FCA7C724376B303AF19 /* Resource.swift in Sources */,
+				F60322F2CC8B462EB8228ADE /* DatabaseManager.swift in Sources */,
+				487AF401AF3B41838E9D68F3 /* AppState.swift in Sources */,
+				78108E5C2C344AA0B293B763 /* SidebarView.swift in Sources */,
+				2BE5258D6B71446CBF4D9803 /* LoginView.swift in Sources */,
+				320C7FBBE6174F4E8228443E /* JoplinCloudApi.swift in Sources */,
+				A931CF2E26604E45AB5D3BEA /* JoplinAccountStore.swift in Sources */,
+				ACDC4D0956034170849C708D /* JoplinItemParser.swift in Sources */,
+				1B6F6311F57843BFAD49C432 /* MarkdownToHtml.swift in Sources */,
+				1CA7D9173A7E46FF843A6C6F /* JoplinSyncEngine.swift in Sources */,
+				CEC2D623AD9949DC80033308 /* MiniHtmlParser.swift in Sources */,
+				FB89282D873445628BFEDAB2 /* HtmlToMarkdown.swift in Sources */,
+				28896BA2C49B429694778DD1 /* JoplinItemSerializer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D1E2F3A4B5C6D7E8F9A0B1C2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				A2B3C4D5E6F7A8B9C0D1E2F3 /* NotesTNApp.swift in Sources */,
+				H1A1A1A1A1A1A1A1A1A1A1A1 /* AppColors.swift in Sources */,
 				A4B5C6D7E8F9A0B1C2D3E4F5 /* ContentView.swift in Sources */,
 				A6B7C8D9E0F1A2B3C4D5E6F7 /* Note.swift in Sources */,
 				A8B9C0D1E2F3A4B5C6D7E8F9 /* Folder.swift in Sources */,
@@ -209,12 +340,92 @@
 				B6C7D8E9F0A1B2C3D4E5F6A7 /* NoteListView.swift in Sources */,
 				B8C9D0E1F2A3B4C5D6E7F8A9 /* EditorView.swift in Sources */,
 				E6F7A8B9C0D1E2F3A4B5C6D7 /* Resource.swift in Sources */,
+				F1A1A1A1A1A1A1A1A1A1A1A1 /* JoplinCloudApi.swift in Sources */,
+				F3A3A3A3A3A3A3A3A3A3A3A3 /* JoplinAccountStore.swift in Sources */,
+				F5A5A5A5A5A5A5A5A5A5A5A5 /* LoginView.swift in Sources */,
+				FA0A0A0A0A0A0A0A0A0A0A0A /* JoplinItemParser.swift in Sources */,
+				FC0C0C0C0C0C0C0C0C0C0C0C /* MarkdownToHtml.swift in Sources */,
+				FE0E0E0E0E0E0E0E0E0E0E0E /* JoplinSyncEngine.swift in Sources */,
+				G1A1A1A1A1A1A1A1A1A1A1A1 /* MiniHtmlParser.swift in Sources */,
+				G3A3A3A3A3A3A3A3A3A3A3A3 /* HtmlToMarkdown.swift in Sources */,
+				G5A5A5A5A5A5A5A5A5A5A5A5 /* JoplinItemSerializer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		528CAEC62FFDBAF7002F661C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HDYX3W9SZJ;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ikuteam.NotesTN.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		528CAEC72FFDBAF7002F661C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HDYX3W9SZJ;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ikuteam.NotesTN.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		D7E8F9A0B1C2D3E4F5A6B7C8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -338,11 +549,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "NotesTN/NotesTN.entitlements";
+				CODE_SIGN_ENTITLEMENTS = NotesTN/NotesTN.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = HDYX3W9SZJ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -356,7 +569,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.ikuteam.NotesTN";
+				PRODUCT_BUNDLE_IDENTIFIER = com.ikuteam.NotesTN;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -368,11 +581,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "NotesTN/NotesTN.entitlements";
+				CODE_SIGN_ENTITLEMENTS = NotesTN/NotesTN.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = HDYX3W9SZJ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -386,7 +601,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.ikuteam.NotesTN";
+				PRODUCT_BUNDLE_IDENTIFIER = com.ikuteam.NotesTN;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -396,6 +611,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		528CAEC52FFDBAF7002F661C /* Build configuration list for PBXNativeTarget "Notes TN" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				528CAEC62FFDBAF7002F661C /* Debug */,
+				528CAEC72FFDBAF7002F661C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		D5E6F7A8B9C0D1E2F3A4B5C6 /* Build configuration list for PBXProject "NotesTN" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -415,7 +639,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = D4E5F6A7B8C9D0E1F2A3B4C5 /* Project object */;
 }

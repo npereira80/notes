@@ -197,6 +197,30 @@ export const toggleCheckbox: CommandFn = (view) => {
   return false;
 };
 
+// Same as toggleCheckbox above, but resolves the task_list_item from an explicit
+// document position instead of the current selection. The checkbox's click handler
+// (index.ts) calls event.preventDefault() before the browser would normally move
+// the selection to the clicked spot, so state.selection at that point is still
+// wherever the cursor was left from a previous click/edit — toggleCheckbox would
+// silently toggle the wrong (or no) line. Call this with the position resolved
+// from the actual clicked DOM node (view.posAtDOM) instead.
+export const toggleCheckboxAtPos = (view: EditorView, pos: number): boolean => {
+  const { state, dispatch } = view;
+  const $pos = state.doc.resolve(pos);
+  for (let d = $pos.depth; d >= 0; d--) {
+    const node = $pos.node(d);
+    if (node.type === schema.nodes.task_list_item) {
+      if (dispatch) {
+        const nodePos = $pos.before(d);
+        const checked = !node.attrs.checked;
+        dispatch(state.tr.setNodeMarkup(nodePos, undefined, { ...node.attrs, checked }));
+      }
+      return true;
+    }
+  }
+  return false;
+};
+
 // ── Indent / outdent ──────────────────────────────────────────────────────────
 
 const indentList: CommandFn = (view) => {

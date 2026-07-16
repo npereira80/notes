@@ -12,7 +12,21 @@ import { tableNodes } from 'prosemirror-tables';
 
 const nodes = {
   doc: {
-    content: 'block+',
+    // Every doc has exactly one title node, always first, followed by the note
+    // body. This lets the title scroll in the same element/scroll-context as
+    // the body instead of living in a separate native text field.
+    content: 'title block*',
+  },
+
+  // The note's title, as the doc's mandatory first node. A plain div (not an
+  // h1) so it can never collide with the `heading` node's h1-h6 parseDOM
+  // rules below. No marks — the native title field was always plain text.
+  title: {
+    content: 'inline*',
+    marks: '',
+    defining: true,
+    parseDOM: [{ tag: 'div.pm-title' }],
+    toDOM() { return ['div', { class: 'pm-title' }, 0] as const; },
   },
 
   paragraph: {
@@ -51,6 +65,12 @@ const nodes = {
     })),
     toDOM(node: any) {
       const attrs: Record<string, string> = {};
+      // Level 1 ("Title" in the toolbar's style menu) is a plain heading with no
+      // collapse behavior — only level 3/4 ("Heading"/"Subheading") get the arrow.
+      // See the collapse plugin in index.ts, which only acts on level !== 1.
+      if (node.attrs.level === 1) {
+        return [`h${node.attrs.level}`, attrs, 0] as any;
+      }
       if (node.attrs.collapsed) attrs['data-collapsed'] = '';
       // Non-editable arrow span + content hole in a second span.
       // The arrow is purely visual (CSS ::after); the content hole carries the text.
