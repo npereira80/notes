@@ -80,8 +80,11 @@ struct PadSidebarView: View {
     // is scoped to whichever folder is currently selected, so counting against it
     // would show 0 for every notebook except the selected one. Same approach as
     // Mac's SidebarView.swift.
+    // Uses the dedicated COUNT(*) query — the old fetchNotes(folderId:).count
+    // materialized every note's full HTML body per folder, per sidebar render (and
+    // the sidebar re-renders on every AppState publish, i.e. every keystroke).
     private func noteCount(for folder: Folder) -> Int {
-        DatabaseManager.shared.fetchNotes(folderId: folder.id).count
+        DatabaseManager.shared.noteCount(folderId: folder.id)
     }
 
     var body: some View {
@@ -160,12 +163,15 @@ struct PadSidebarView: View {
         // before, making a running (or silently failed) sync look like nothing was
         // happening.
         .safeAreaInset(edge: .top) {
-            if appState.isSyncing {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
+            // Always rendered, hidden via opacity — conditionally inserting the
+            // spinner changed the safe-area inset, shifting the entire sidebar down
+            // and back up every time the 2s-debounced background push ran (i.e.
+            // periodically while typing). Same fix as Mac/iPhone's SidebarView.swift.
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .opacity(appState.isSyncing ? 1 : 0)
         }
         // Bottom-left: create a new notebook. Bottom-right: connect to Joplin Cloud /
         // force resync, behind a single icon (a Menu) rather than several separate

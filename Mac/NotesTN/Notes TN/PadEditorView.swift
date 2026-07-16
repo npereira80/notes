@@ -74,12 +74,23 @@ private struct PadNoteEditorView: View {
         self.readOnly = readOnly
     }
 
+    /// The freshest copy of this view's note in AppState (live or trashed) — the
+    /// init-time title/body snapshot goes stale as soon as the user types or a sync
+    /// pulls a newer version.
+    private var currentNote: Note? {
+        appState.notes.first { $0.id == noteID } ?? appState.trashedNotes.first { $0.id == noteID }
+    }
+
     var body: some View {
         RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
             .onAppear {
                 editorCoordinator.onContentChanged = { title, html in
-                    guard let note = appState.notes.first(where: { $0.id == noteID }) else { return }
-                    var updated = note
+                    // Falls back to the DB copy when the note isn't in appState.notes
+                    // — it can legitimately be missing (e.g. an active search whose
+                    // results no longer include it after this very edit); returning
+                    // here silently dropped the user's keystrokes.
+                    guard var updated = appState.notes.first(where: { $0.id == noteID })
+                        ?? DatabaseManager.shared.fetchNote(id: noteID) else { return }
                     updated.title = title
                     updated.body = html
                     appState.saveNote(updated)
@@ -87,11 +98,28 @@ private struct PadNoteEditorView: View {
             }
             .onChange(of: editorCoordinator.isReady) { _, ready in
                 guard ready else { return }
-                editorCoordinator.setContent(title: initialTitle, body: initialBody)
+                // Reads the note fresh from AppState (falling back to the init-time
+                // snapshot) — isReady also re-fires after a content-process-terminate
+                // reload (see EditorCoordinator.webViewWebContentProcessDidTerminate),
+                // by which time the snapshot may be stale.
+                let note = currentNote
+                editorCoordinator.setContent(title: note?.title ?? initialTitle, body: note?.body ?? initialBody)
                 if !readOnly {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         editorCoordinator.focus()
                     }
+                }
+            }
+            // A sync pull that updates the currently open note used to leave the
+            // editor showing the old content until the note was reopened or the app
+            // relaunched — and the next autosave would overwrite the pulled remote
+            // edit with the stale editor content. lastKnown* filtering keeps this
+            // from reacting to the echo of the editor's own autosaves. Same fix as
+            // Mac's NoteEditorView.
+            .onChange(of: currentNote?.updatedTime) { _, _ in
+                guard editorCoordinator.isReady, let note = currentNote else { return }
+                if note.title != editorCoordinator.lastKnownTitle || note.body != editorCoordinator.lastKnownBody {
+                    editorCoordinator.setContent(title: note.title, body: note.body)
                 }
             }
             .toolbar {

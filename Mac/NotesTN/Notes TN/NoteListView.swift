@@ -55,9 +55,7 @@ private enum NoteGroup: Hashable {
             comps.year = Calendar.current.component(.year, from: Date())
             comps.month = month; comps.day = 1
             let date = Calendar.current.date(from: comps) ?? Date()
-            let fmt = DateFormatter()
-            fmt.dateFormat = "MMMM"
-            return fmt.string(from: date)
+            return phoneMonthFormatter.string(from: date)
         case .year(let year):
             return String(year)
         }
@@ -93,22 +91,38 @@ private func group(for note: Note) -> NoteGroup {
     return .year(y)
 }
 
+// Formatters are cached at file scope — DateFormatter.init costs milliseconds, and
+// rowDate runs per visible row per list render (which happens per keystroke while
+// typing, since the list observes AppState). Allocating fresh formatters there was
+// a measurable slice of the list's lag. Same fix as Mac's NoteListView.swift.
+// (phone-prefixed so they don't collide with PadNoteListView.swift's copies — both
+// files compile into the same iOS target at file scope.)
+private let phoneMonthFormatter: DateFormatter = {
+    let f = DateFormatter(); f.dateFormat = "MMMM"; return f
+}()
+private let phoneTimeFormatter: DateFormatter = {
+    let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
+}()
+private let phoneWeekdayFormatter: DateFormatter = {
+    let f = DateFormatter(); f.dateFormat = "EEEE"; return f
+}()
+private let phoneShortDateFormatter: DateFormatter = {
+    let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .none; return f
+}()
+
 private func rowDate(_ note: Note) -> String {
     let cal = Calendar.current
     let d   = note.updatedTime
     if cal.isDateInToday(d) {
-        let f = DateFormatter(); f.dateFormat = "HH:mm"
-        return f.string(from: d)
+        return phoneTimeFormatter.string(from: d)
     }
     if cal.isDateInYesterday(d) { return "Yesterday" }
     let days = cal.dateComponents([.day], from: d, to: Date()).day ?? 0
     if days < 7 {
-        let f = DateFormatter(); f.dateFormat = "EEEE"   // "Monday"
-        return f.string(from: d)
+        return phoneWeekdayFormatter.string(from: d)   // "Monday"
     }
     // Older: show short date
-    let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .none
-    return f.string(from: d)
+    return phoneShortDateFormatter.string(from: d)
 }
 
 // MARK: - Main view
@@ -311,6 +325,11 @@ struct NoteListView: View {
     private func forceResync() async {
         appState.syncNow(force: true)
         while appState.isSyncing {
+            // Bail out if the refresh gesture's task is cancelled (view re-keyed,
+            // navigation, etc.) — Task.sleep then throws immediately and try? swallows
+            // it, which turned this loop into a hot spin on the main actor for the
+            // rest of the sync.
+            if Task.isCancelled { return }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
@@ -611,11 +630,11 @@ struct NoteRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if let thumbnailURL {
-                AsyncImage(url: thumbnailURL) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.clear
-                }
+                // ThumbnailImage (not AsyncImage) — decodes straight to thumbnail
+                // size on a background queue and caches the result; AsyncImage
+                // decoded the full-size original per row, per scroll-in, with no
+                // caching for file:// URLs. See ThumbnailImage.swift.
+                ThumbnailImage(url: thumbnailURL)
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 // Row's own shared vertical padding (below, on the whole HStack) is 8pt —

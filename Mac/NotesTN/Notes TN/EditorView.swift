@@ -41,6 +41,14 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     @Published var selectionState = EditorSelectionState()
     @Published var isReady = false
 
+    // The last content this editor is known to hold — written by setContent (what we
+    // pushed in) and by the contentChanged message (what the user typed). Lets the
+    // owning view tell a sync-pulled external change (DB body differs from this →
+    // refresh the editor) from the echo of its own autosave (identical → ignore),
+    // without re-keying/reloading the WKWebView. Mirrors Mac's EditorCoordinator.
+    var lastKnownTitle: String = ""
+    var lastKnownBody: String = ""
+
     // The webview — set by RichTextEditorView.makeUIView
     weak var webView: WKWebView?
 
@@ -60,7 +68,10 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
         case "contentChanged":
             if let html = body["html"] as? String {
-                onContentChanged?(body["title"] as? String ?? "", html)
+                let title = body["title"] as? String ?? ""
+                lastKnownTitle = title
+                lastKnownBody = html
+                onContentChanged?(title, html)
             }
 
         case "selectionChanged":
@@ -114,6 +125,8 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
     func setContent(title: String, body: String) {
         guard let wv = webView else { return }
+        lastKnownTitle = title
+        lastKnownBody = body
         // JSONEncoder handles bare String top-level values safely.
         guard let titleData = try? JSONEncoder().encode(title),
               let titleJSON = String(data: titleData, encoding: .utf8),
@@ -144,6 +157,21 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         guard let wv = webView else { return }
         wv.becomeFirstResponder()
         wv.evaluateJavaScript("window.NativeEditor?.focus()")
+    }
+
+    // MARK: WKNavigationDelegate — content process recovery
+
+    // iOS kills WKWebView content processes readily (memory pressure, long
+    // background stretches). Without this, the editor silently turns blank/broken
+    // and stays that way until the app is force-quit and reopened. Reloading
+    // re-runs the page, which re-fires the JS "ready" message — isReady flipping
+    // back to true makes the owning view push the current content back in via its
+    // onChange(of: isReady).
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MainActor.assumeIsolated {
+            isReady = false
+            webView.reload()
+        }
     }
 
     // MARK: WKNavigationDelegate — open links in default browser
@@ -266,6 +294,12 @@ struct RichTextEditorView: UIViewRepresentable {
 /// DatabaseManager.resourceLocalUrl(id:) is the single place that emits this scheme
 /// (iOS-only branch) — see DatabaseManager.swift.
 final class ImageResourceSchemeHandler: NSObject, WKURLSchemeHandler {
+    // Tasks WebKit has cancelled (stop was called) — calling didReceive/didFinish on
+    // a stopped task throws an ObjC exception. Guarded because the file read below
+    // now happens off-thread, so a task can be stopped mid-read. Accessed on the
+    // main thread only (WebKit delivers start/stop there, and the read hops back).
+    private var stoppedTasks = Set<ObjectIdentifier>()
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         guard let url = urlSchemeTask.request.url,
               let dir = DatabaseManager.shared.resourcesDirectory else {
@@ -275,21 +309,33 @@ final class ImageResourceSchemeHandler: NSObject, WKURLSchemeHandler {
         let filename = url.lastPathComponent
         let fileURL = dir.appendingPathComponent(filename)
 
-        guard let data = try? Data(contentsOf: fileURL) else {
-            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
-            return
+        // The read runs off the main thread — WebKit calls this handler on main, and
+        // a multi-MB photo read with Data(contentsOf:) stalled the whole UI every
+        // time a note containing images was opened. The urlSchemeTask calls hop back
+        // to main (they must run on the thread the task was delivered on).
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let data = try? Data(contentsOf: fileURL)
+            let mimeType = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // Removing (not just checking) keeps the set from accumulating —
+                // every stopped task's marker is consumed exactly once, by the
+                // completion of its own in-flight read.
+                if self.stoppedTasks.remove(ObjectIdentifier(urlSchemeTask)) != nil { return }
+                guard let data else {
+                    urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
+                    return
+                }
+                let response = URLResponse(url: url, mimeType: mimeType, expectedContentLength: data.count, textEncodingName: nil)
+                urlSchemeTask.didReceive(response)
+                urlSchemeTask.didReceive(data)
+                urlSchemeTask.didFinish()
+            }
         }
-
-        let mimeType = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        let response = URLResponse(url: url, mimeType: mimeType, expectedContentLength: data.count, textEncodingName: nil)
-        urlSchemeTask.didReceive(response)
-        urlSchemeTask.didReceive(data)
-        urlSchemeTask.didFinish()
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // Reads above are synchronous and already complete by the time this could
-        // fire — nothing to cancel.
+        stoppedTasks.insert(ObjectIdentifier(urlSchemeTask))
     }
 }
 
@@ -471,7 +517,12 @@ struct NoteEditorView: View {
         }
         .onChange(of: editorCoordinator.isReady) { _, ready in
             guard ready else { return }
-            editorCoordinator.setContent(title: initialTitle, body: initialBody)
+            // Reads the note fresh from AppState (falling back to the init-time
+            // snapshot) — isReady also re-fires after a content-process-terminate
+            // reload (see EditorCoordinator.webViewWebContentProcessDidTerminate),
+            // by which time the snapshot may be stale.
+            let note = currentNote
+            editorCoordinator.setContent(title: note?.title ?? initialTitle, body: note?.body ?? initialBody)
             // Unlike Mac (where clicking anywhere hands keyboard focus to whatever
             // NSView was clicked, via AppKit's default mouse-down handling), iOS has
             // no equivalent automatic tap-to-focus for a UIViewRepresentable-wrapped
@@ -483,6 +534,17 @@ struct NoteEditorView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     editorCoordinator.focus()
                 }
+            }
+        }
+        // A sync pull that updates the currently open note used to leave the editor
+        // showing the old content until the note was reopened or the app relaunched
+        // — and the next autosave would overwrite the pulled remote edit with the
+        // stale editor content. lastKnown* filtering keeps this from reacting to the
+        // echo of the editor's own autosaves. Same fix as Mac's NoteEditorView.
+        .onChange(of: currentNote?.updatedTime) { _, _ in
+            guard editorCoordinator.isReady, let note = currentNote else { return }
+            if note.title != editorCoordinator.lastKnownTitle || note.body != editorCoordinator.lastKnownBody {
+                editorCoordinator.setContent(title: note.title, body: note.body)
             }
         }
         // Image picker
@@ -497,6 +559,13 @@ struct NoteEditorView: View {
 
     private var trashedNote: Note? {
         appState.trashedNotes.first { $0.id == noteID }
+    }
+
+    /// The freshest copy of this view's note in AppState (live or trashed) — the
+    /// init-time title/body snapshot goes stale as soon as the user types or a sync
+    /// pulls a newer version.
+    private var currentNote: Note? {
+        appState.notes.first { $0.id == noteID } ?? trashedNote
     }
 
     // iPad-only compact search field, placed directly in this view's own toolbar
@@ -554,8 +623,12 @@ struct NoteEditorView: View {
 
     private func setupCallbacks() {
         editorCoordinator.onContentChanged = { title, html in
-            guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
-            var updated = note
+            // Falls back to the DB copy when the note isn't in appState.notes — it can
+            // legitimately be missing (e.g. an active search whose results no longer
+            // include it after this very edit); returning here silently dropped the
+            // user's keystrokes.
+            guard var updated = self.appState.notes.first(where: { $0.id == self.noteID })
+                ?? DatabaseManager.shared.fetchNote(id: self.noteID) else { return }
             updated.title = title
             updated.body = html
             self.appState.saveNote(updated)
