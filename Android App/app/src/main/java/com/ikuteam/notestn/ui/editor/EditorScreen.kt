@@ -6,6 +6,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
@@ -32,6 +35,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FormatIndentDecrease
@@ -71,13 +75,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
 import com.ikuteam.notestn.data.Resource
+import com.ikuteam.notestn.data.joplin.HtmlToMarkdown
 import com.ikuteam.notestn.ui.common.backdropBlurBackground
 import com.ikuteam.notestn.ui.common.captureForBackdropBlur
 import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
@@ -135,6 +143,7 @@ fun EditorScreen(
     val imeHeightDp = with(density) { imeBottomPx.toDp() }
 
     var showLinkDialog by remember(note.id) { mutableStateOf(false) }
+    var showMarkdownSource by remember(note.id) { mutableStateOf(false) }
     var confirmPermanentDelete by remember(note.id) { mutableStateOf(false) }
 
     LaunchedEffect(coordinator, note.id) {
@@ -301,6 +310,7 @@ fun EditorScreen(
                             coordinator = coordinator,
                             onInsertImage = { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onInsertLink = { showLinkDialog = true },
+                            onShowMarkdownSource = { showMarkdownSource = true },
                         )
                     }
                 }
@@ -316,6 +326,17 @@ fun EditorScreen(
                 if (href.isNotBlank()) coordinator.setLink(href)
             },
             onDismiss = { showLinkDialog = false },
+        )
+    }
+
+    if (showMarkdownSource) {
+        // A debugging aid: shows the Joplin Markdown that the current editor HTML
+        // converts to (the format actually stored/synced), so an HTML rendering bug
+        // can be traced back to its Markdown source. lastKnownBody is the HTML the
+        // editor last reported (see EditorCoordinator).
+        MarkdownSourceDialog(
+            markdown = remember(coordinator.lastKnownBody) { HtmlToMarkdown.convert(coordinator.lastKnownBody) },
+            onDismiss = { showMarkdownSource = false },
         )
     }
 
@@ -367,6 +388,7 @@ private fun EditorToolbar(
     coordinator: EditorCoordinator,
     onInsertImage: () -> Unit,
     onInsertLink: () -> Unit,
+    onShowMarkdownSource: () -> Unit,
 ) {
     val s = coordinator.selectionState
     var showHeadingMenu by remember { mutableStateOf(false) }
@@ -460,7 +482,36 @@ private fun EditorToolbar(
         ToolbarToggleButton(Icons.Filled.Link, "Link", s.hasLink) {
             if (s.hasLink) coordinator.removeLink() else onInsertLink()
         }
+
+        ToolbarDivider()
+        // Debugging aid — view the Markdown source the current HTML converts to.
+        ToolbarIconButton(Icons.Filled.DataObject, "View Markdown Source", onShowMarkdownSource)
     }
+}
+
+@Composable
+private fun MarkdownSourceDialog(markdown: String, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Markdown Source") },
+        text = {
+            SelectionContainer {
+                Text(
+                    markdown.ifEmpty { "(empty)" },
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = {
+            TextButton(onClick = { clipboard.setText(AnnotatedString(markdown)) }) { Text("Copy") }
+        },
+    )
 }
 
 @Composable

@@ -734,6 +734,7 @@ struct EditorToolbarView: View {
     var showsUndoRedo: Bool = true
     @State private var isShowingLinkInput = false
     @State private var linkText = ""
+    @State private var showMarkdownSource = false
 
     var body: some View {
         HStack(spacing: 2) {
@@ -838,6 +839,13 @@ struct EditorToolbarView: View {
 
             Divider().frame(height: 20)
 
+            // Debugging aid — view the Joplin Markdown the current editor HTML converts
+            // to (the format actually stored/synced), so an HTML rendering bug can be
+            // traced to its Markdown source.
+            FormatButton(icon: "doc.plaintext") { showMarkdownSource = true }
+
+            Divider().frame(height: 20)
+
             if showsUndoRedo {
                 // Undo/redo — no longer pushed to the trailing edge with a Spacer()
                 // now that this toolbar scrolls horizontally (see NoteEditorView): a
@@ -868,6 +876,41 @@ struct EditorToolbarView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showMarkdownSource) {
+            MarkdownSourceView(markdown: HtmlToMarkdown.convert(coordinator.lastKnownBody))
+        }
+    }
+}
+
+// MARK: - Markdown source viewer
+
+/// Read-only view of a note's Markdown source (what HtmlToMarkdown produces from the
+/// current editor HTML). A debugging aid for tracing HTML rendering issues back to
+/// their stored/synced Markdown. Shared by iPad (PadEditorView) and iPhone.
+private struct MarkdownSourceView: View {
+    let markdown: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(markdown.isEmpty ? "(empty)" : markdown)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle("Markdown Source")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Copy") { UIPasteboard.general.string = markdown }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
     }
 }

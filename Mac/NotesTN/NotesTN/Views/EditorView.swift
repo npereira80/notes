@@ -581,6 +581,7 @@ struct NoteEditorView: View {
 struct EditorToolbarView: View {
     @ObservedObject var coordinator: EditorCoordinator
     var onInsertImage: () -> Void
+    @State private var showMarkdownSource = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -687,9 +688,21 @@ struct EditorToolbarView: View {
                     showLinkInput()
                 }
             }
+
+            Divider()
+
+            // Debugging aid — view the Joplin Markdown the current editor HTML converts
+            // to (the format actually stored/synced), so an HTML rendering bug can be
+            // traced to its Markdown source.
+            FormatButton(icon: "doc.plaintext", tooltip: "View Markdown Source") {
+                showMarkdownSource = true
+            }
             .padding(.trailing, 8)
         }
         .contentShape(Rectangle())  // entire toolbar row is event-opaque; gaps between buttons don't fall through
+        .sheet(isPresented: $showMarkdownSource) {
+            MarkdownSourceView(markdown: HtmlToMarkdown.convert(coordinator.lastKnownBody))
+        }
     }
 
     private func showLinkInput() {
@@ -755,6 +768,41 @@ struct FormatToggleButton: View {
         .buttonStyle(.borderless)
         .help(tooltip)
         .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+    }
+}
+
+// MARK: - Markdown source viewer
+
+/// Read-only view of a note's Markdown source (what HtmlToMarkdown produces from the
+/// current editor HTML). A debugging aid for tracing HTML rendering issues back to
+/// their stored/synced Markdown.
+private struct MarkdownSourceView: View {
+    let markdown: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Markdown Source").font(.headline)
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(markdown, forType: .string)
+                }
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            Divider()
+            ScrollView {
+                Text(markdown.isEmpty ? "(empty)" : markdown)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+        }
+        .frame(width: 540, height: 480)
     }
 }
 
