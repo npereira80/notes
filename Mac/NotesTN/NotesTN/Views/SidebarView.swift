@@ -88,8 +88,11 @@ struct SidebarView: View {
     // Queries the database directly instead of filtering appState.notes — that array
     // is scoped to whichever folder is currently selected (db.fetchNotes(folderId:)),
     // so counting against it showed 0 for every notebook except the selected one.
+    // Uses the dedicated COUNT(*) query — the old fetchNotes(folderId:).count
+    // materialized every note's full HTML body per folder, per sidebar render (and
+    // the sidebar re-renders on every AppState publish, i.e. every keystroke).
     private func noteCount(for folder: Folder) -> Int {
-        DatabaseManager.shared.fetchNotes(folderId: folder.id).count
+        DatabaseManager.shared.noteCount(folderId: folder.id)
     }
 
     // Builds "All Notes"/"Trash" rows as an explicit Image + Text instead of
@@ -261,12 +264,15 @@ struct SidebarView: View {
             appState.isSidebarFocused = newValue
         }
         .safeAreaInset(edge: .top) {
-            if appState.isSyncing {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
+            // Always rendered, hidden via opacity — conditionally inserting the
+            // spinner changed the safe-area inset, shifting the entire sidebar down
+            // and back up every time the 2s-debounced background push ran (i.e.
+            // periodically while typing).
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .opacity(appState.isSyncing ? 1 : 0)
         }
         .safeAreaInset(edge: .bottom) {
             HStack {

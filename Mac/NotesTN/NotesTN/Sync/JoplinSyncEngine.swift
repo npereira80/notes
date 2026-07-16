@@ -78,9 +78,16 @@ actor JoplinSyncEngine {
 
             if change.type == Self.changeTypeDelete {
                 // Only remove local rows that a previous pull created — never touch
-                // notes that only ever existed locally.
+                // items that only ever existed locally. A delta delete doesn't say
+                // what type the item was (the content is already gone server-side),
+                // so try all three tables: ids are globally unique in Joplin, so the
+                // two misses are safe no-ops. Handling only notes here meant a
+                // notebook or resource deleted on another device stayed around
+                // locally forever (ghost folders that not even a relaunch cleared).
                 let id = itemName.hasSuffix(".md") ? String(itemName.dropLast(3)) : itemName
                 db.deleteNote(id: id)
+                db.deleteFolder(id: id)
+                db.deleteResource(id: id)
                 continue
             }
 

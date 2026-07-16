@@ -46,9 +46,30 @@ struct Note: Identifiable, Hashable, Equatable {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
+    // Both `preview` and `firstImageResourceId` run regexes over the entire HTML
+    // body. The note list reads them per visible row per render (and the whole list
+    // re-renders on every AppState publish, i.e. every keystroke autosave), so the
+    // results are cached per (id, updatedTime) — any edit bumps updatedTime, which
+    // changes the key and naturally invalidates the entry. NSCache is thread-safe
+    // and evicts automatically under memory pressure.
+    private static let previewCache = NSCache<NSString, NSString>()
+    private static let firstImageCache = NSCache<NSString, NSString>()
+
+    private var derivedCacheKey: NSString {
+        "\(id)-\(updatedTime.timeIntervalSince1970)" as NSString
+    }
+
     // Plain-text preview extracted from HTML body
     var preview: String {
         guard !body.isEmpty else { return "" }
+        let key = derivedCacheKey
+        if let cached = Self.previewCache.object(forKey: key) { return cached as String }
+        let computed = computePreview()
+        Self.previewCache.setObject(computed as NSString, forKey: key)
+        return computed
+    }
+
+    private func computePreview() -> String {
         // Strip HTML tags
         let noTags = body.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
         // Collapse whitespace and newlines
@@ -69,7 +90,18 @@ struct Note: Identifiable, Hashable, Equatable {
 
     // Resource id of the first image in the body, or nil if there is none — used
     // for the note list's thumbnail (mirrors Apple Notes' list row thumbnail).
+    // Cached like `preview` above ("" = cached "no image").
     var firstImageResourceId: String? {
+        let key = derivedCacheKey
+        if let cached = Self.firstImageCache.object(forKey: key) {
+            return cached.length == 0 ? nil : cached as String
+        }
+        let computed = computeFirstImageResourceId()
+        Self.firstImageCache.setObject((computed ?? "") as NSString, forKey: key)
+        return computed
+    }
+
+    private func computeFirstImageResourceId() -> String? {
         guard let imgRange = body.range(of: "<img\\b[^>]*>", options: .regularExpression) else { return nil }
         let imgTag = String(body[imgRange])
 

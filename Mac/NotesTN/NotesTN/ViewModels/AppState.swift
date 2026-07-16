@@ -156,6 +156,9 @@ final class AppState: ObservableObject {
         pushDebounceTask = Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled else { return }
+            // Re-checked after the sleep: a logout during the 2s window would
+            // otherwise surface a spurious "Not logged in" sync error.
+            guard JoplinAccountStore.shared.account != nil else { return }
             syncNow()
         }
     }
@@ -193,19 +196,34 @@ final class AppState: ObservableObject {
 
     // MARK: - Load
 
+    // Assignments below are gated behind an inequality check: loadAll() runs after
+    // every sync (including the 2s-debounced push while typing), and re-assigning an
+    // identical array still fires objectWillChange — re-rendering the entire window
+    // (sidebar counts, every visible note row, editor chrome) for nothing.
     func loadAll() {
-        folders = db.fetchFolders()
-        trashedFolders = db.fetchTrashedFolders()
+        let freshFolders = db.fetchFolders()
+        if freshFolders != folders { folders = freshFolders }
+        let freshTrashedFolders = db.fetchTrashedFolders()
+        if freshTrashedFolders != trashedFolders { trashedFolders = freshTrashedFolders }
         loadNotes()
     }
 
     func loadNotes() {
+        let freshNotes: [Note]
         if !searchText.isEmpty {
-            notes = db.searchNotes(query: searchText)
+            freshNotes = db.searchNotes(query: searchText)
         } else {
-            notes = db.fetchNotes(folderId: selectedFolderID)
+            freshNotes = db.fetchNotes(folderId: selectedFolderID)
         }
-        trashedNotes = db.fetchTrashedNotes()
+        if freshNotes != notes { notes = freshNotes }
+        // Trashed notes are only visible while Trash is selected — skipping the fetch
+        // otherwise avoids loading every trashed note's full body on every call (this
+        // runs after each sync). selectTrash() re-runs loadNotes(), so the array is
+        // always fresh by the time Trash is actually shown.
+        if isTrashSelected {
+            let freshTrashed = db.fetchTrashedNotes()
+            if freshTrashed != trashedNotes { trashedNotes = freshTrashed }
+        }
     }
 
     // MARK: - Folder actions
@@ -229,6 +247,9 @@ final class AppState: ObservableObject {
         selectedNoteID = nil
         // Persisted so the app reopens in Trash next launch — see restoreFolderSelection().
         UserDefaults.standard.set(true, forKey: isTrashSelectedKey)
+        // trashedNotes is only kept fresh while Trash is selected (see loadNotes) —
+        // refresh it now that it's about to be shown.
+        loadNotes()
     }
 
     func createFolder(title: String = "New Notebook") {
@@ -350,12 +371,26 @@ final class AppState: ObservableObject {
         db.saveNote(updated, dirty: true, synced: db.noteSyncedFlag(id: note.id))
         // An image removed from the body (but the note itself kept) leaves an orphaned
         // resource behind — clean it up the same way a deleted note's resources are
-        // cleaned up below.
-        if let previousBody {
+        // cleaned up below. The regex scan runs over both full bodies, so the cheap
+        // contains() pre-check skips it entirely for image-less notes — this runs on
+        // every autosave tick (i.e. while typing).
+        if let previousBody,
+           previousBody.contains("data-resource-id") || updated.body.contains("data-resource-id") {
             unlinkRemovedResources(noteId: note.id, oldBody: previousBody, newBody: updated.body)
         }
-        // Refresh list without losing selection
-        notes = db.fetchNotes(folderId: selectedFolderID)
+        // Update the one changed row in place instead of re-fetching the whole folder
+        // (which loaded every note's full body per keystroke, and also silently
+        // replaced active search results with the unfiltered folder list). The list
+        // deliberately keeps its current order while editing — it re-sorts by
+        // updated_time on the next loadNotes() (folder switch, sync, launch), so the
+        // row being edited doesn't jump to the top under the cursor mid-typing.
+        if let idx = notes.firstIndex(where: { $0.id == updated.id }) {
+            notes[idx] = updated
+        } else if let idx = trashedNotes.firstIndex(where: { $0.id == updated.id }) {
+            trashedNotes[idx] = updated
+        } else {
+            loadNotes()
+        }
         schedulePushDebounce()
     }
 
@@ -489,11 +524,26 @@ final class AppState: ObservableObject {
 
     // MARK: - Search
 
+    private var searchDebounceTask: Task<Void, Never>?
+
     // While typing: just re-filters the results list, nothing auto-opens. Preview
     // of the first result only happens on submitSearch() (Enter key) — see below.
+    // The actual query is debounced: searchNotes is an unindexed LIKE scan over
+    // every note's title and full body, so running it synchronously per keystroke
+    // made the search field itself hitch on larger databases. Clearing the field
+    // refreshes immediately (fetchNotes by folder is cheap and it feels snappier).
     func search(_ query: String) {
         searchText = query
-        loadNotes()
+        searchDebounceTask?.cancel()
+        guard !query.isEmpty else {
+            loadNotes()
+            return
+        }
+        searchDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            loadNotes()
+        }
     }
 
     // Called when the search field is submitted (Enter key) — opens the first
@@ -504,6 +554,11 @@ final class AppState: ObservableObject {
     // user away from the results they're scanning, which doesn't apply on
     // Mac/iPad's multi-column layouts.
     func submitSearch() {
+        // Flush any pending debounced query first (see search(_:)) so the first
+        // result auto-selected below comes from the text as submitted, not from
+        // however far the debounce had gotten.
+        searchDebounceTask?.cancel()
+        loadNotes()
         #if os(macOS)
         autoSelectFirstSearchResult()
         #elseif os(iOS)

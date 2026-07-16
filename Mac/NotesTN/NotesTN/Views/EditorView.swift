@@ -31,6 +31,14 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     @Published var selectionState = EditorSelectionState()
     @Published var isReady = false
 
+    // The last content this editor is known to hold — written by setContent (what we
+    // pushed in) and by the contentChanged message (what the user typed). Lets
+    // NoteEditorView tell a sync-pulled external change (DB body differs from this →
+    // refresh the editor) from the echo of its own autosave (identical → ignore),
+    // without re-keying/reloading the WKWebView.
+    var lastKnownTitle: String = ""
+    var lastKnownBody: String = ""
+
     // The webview — set by RichTextEditorView.makeNSView
     weak var webView: WKWebView?
 
@@ -52,7 +60,10 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
         case "contentChanged":
             if let html = body["html"] as? String {
-                onContentChanged?(body["title"] as? String ?? "", html)
+                let title = body["title"] as? String ?? ""
+                lastKnownTitle = title
+                lastKnownBody = html
+                onContentChanged?(title, html)
             }
 
         case "selectionChanged":
@@ -106,6 +117,8 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
     func setContent(title: String, body: String) {
         guard let wv = webView else { return }
+        lastKnownTitle = title
+        lastKnownBody = body
         // JSONEncoder handles bare String top-level values safely.
         // NSJSONSerialization throws an ObjC NSException (not a Swift Error) for
         // bare strings, which bypasses try? and corrupts SwiftUI's run loop state,
@@ -155,6 +168,20 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     func setTopInset(_ points: CGFloat) {
         guard let wv = webView else { return }
         wv.evaluateJavaScript("document.documentElement.style.setProperty('--native-toolbar-inset', '\(points)px')")
+    }
+
+    // MARK: WKNavigationDelegate — content process recovery
+
+    // WebKit can kill the editor page's content process (memory pressure, long
+    // background stretches). Without this, the editor silently turns blank/broken
+    // and stays that way until the app is relaunched. Reloading re-runs the page,
+    // which re-fires the JS "ready" message — isReady flipping back to true makes
+    // NoteEditorView push the current content back in via its onChange(of: isReady).
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MainActor.assumeIsolated {
+            isReady = false
+            webView.reload()
+        }
     }
 
     // MARK: WKNavigationDelegate — open links in default browser
@@ -402,7 +429,25 @@ struct NoteEditorView: View {
             setupCallbacks()
         }
         .onChange(of: editorCoordinator.isReady) { _, ready in
-            if ready { editorCoordinator.setContent(title: initialTitle, body: initialBody) }
+            // Reads the note fresh from AppState (falling back to the values captured
+            // at init) — isReady also re-fires after a content-process-terminate
+            // reload (see EditorCoordinator.webViewWebContentProcessDidTerminate),
+            // by which time the init-time snapshot may be stale.
+            guard ready else { return }
+            let note = currentNote
+            editorCoordinator.setContent(title: note?.title ?? initialTitle, body: note?.body ?? initialBody)
+        }
+        // A sync pull that updates the currently open note used to leave the editor
+        // showing the old content (it was only ever set once per note id) — the list
+        // preview and the editor would disagree until the note was reopened or the
+        // app relaunched, and the next autosave would overwrite the pulled remote
+        // edit with the stale editor content. lastKnown* filtering keeps this from
+        // reacting to the echo of the editor's own autosaves.
+        .onChange(of: currentNote?.updatedTime) { _, _ in
+            guard editorCoordinator.isReady, let note = currentNote else { return }
+            if note.title != editorCoordinator.lastKnownTitle || note.body != editorCoordinator.lastKnownBody {
+                editorCoordinator.setContent(title: note.title, body: note.body)
+            }
         }
         // Image picker
         .fileImporter(
@@ -418,6 +463,13 @@ struct NoteEditorView: View {
         appState.trashedNotes.first { $0.id == noteID }
     }
 
+    /// The freshest copy of this view's note in AppState (live or trashed) — the
+    /// init-time title/body snapshot goes stale as soon as the user types or a sync
+    /// pulls a newer version.
+    private var currentNote: Note? {
+        appState.notes.first { $0.id == noteID } ?? trashedNote
+    }
+
     // MARK: Setup
 
     private func setupCallbacks() {
@@ -425,8 +477,12 @@ struct NoteEditorView: View {
         // Mac/EditorBundle's `pm-title` node) — one save path instead of the old
         // separate immediate-body-save / debounced-title-save paths.
         editorCoordinator.onContentChanged = { title, html in
-            guard let note = self.appState.notes.first(where: { $0.id == self.noteID }) else { return }
-            var updated = note
+            // Falls back to the DB copy when the note isn't in appState.notes — it can
+            // legitimately be missing (e.g. an active search whose results no longer
+            // include it after this very edit); returning here silently dropped the
+            // user's keystrokes.
+            guard var updated = self.appState.notes.first(where: { $0.id == self.noteID })
+                ?? DatabaseManager.shared.fetchNote(id: self.noteID) else { return }
             updated.title = title
             updated.body = html
             self.appState.saveNote(updated)

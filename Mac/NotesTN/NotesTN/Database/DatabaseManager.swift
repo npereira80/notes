@@ -319,6 +319,19 @@ final class DatabaseManager {
         return notes
     }
 
+    /// Count of live notes in a folder — used for the sidebar's per-notebook count.
+    /// A plain COUNT(*) instead of fetchNotes(folderId:).count, which materialized
+    /// every note's full HTML body just to count rows (the sidebar re-renders on
+    /// every AppState publish, so that cost ran per folder per keystroke).
+    func noteCount(folderId: String) -> Int {
+        var count = 0
+        withStatement("SELECT COUNT(*) FROM notes WHERE parent_id = ? AND is_conflict = 0 AND deleted_time = 0") { stmt in
+            bind(stmt, 1, folderId)
+            if sqlite3_step(stmt) == SQLITE_ROW { count = Int(sqlite3_column_int64(stmt, 0)) }
+        }
+        return count
+    }
+
     /// Every trashed note across all notebooks, most-recently-deleted first.
     func fetchTrashedNotes() -> [Note] {
         var notes: [Note] = []
@@ -349,6 +362,20 @@ final class DatabaseManager {
             deletedTime: optionalDate(stmt, 8),
             isPinned: int(stmt, 9) != 0
         )
+    }
+
+    /// Single note by id (live or trashed), or nil if it doesn't exist.
+    func fetchNote(id: String) -> Note? {
+        var note: Note?
+        withStatement("""
+            SELECT id, parent_id, title, body, created_time, updated_time,
+                   is_todo, todo_completed, deleted_time, is_pinned
+            FROM notes WHERE id = ?
+            """) { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW { note = noteFromRow(stmt) }
+        }
+        return note
     }
 
     /// Nil if the note doesn't exist locally yet. Used by sync to decide whether a
@@ -512,12 +539,7 @@ final class DatabaseManager {
     /// (ImageResourceSchemeHandler in Notes TN/EditorView.swift) serves this scheme's
     /// bytes directly instead of relying on file:// access.
     func resourceLocalUrl(id: String) -> String? {
-        var filename: String?
-        withStatement("SELECT filename FROM resources WHERE id = ?") { stmt in
-            bind(stmt, 1, id)
-            if sqlite3_step(stmt) == SQLITE_ROW { filename = string(stmt, 0) }
-        }
-        guard let filename else { return nil }
+        guard let filename = resourceFilename(id: id) else { return nil }
         #if os(iOS)
         return "notestn://resource/\(filename)"
         #else
@@ -539,13 +561,37 @@ final class DatabaseManager {
     /// actual file URL (e.g. the note list's thumbnail), unlike [resourceLocalUrl]
     /// which returns an absoluteString for the editor's WKWebView.
     func resourceLocalFileURL(id: String) -> URL? {
+        guard let filename = resourceFilename(id: id), let dir = resourcesDirectory else { return nil }
+        return dir.appendingPathComponent(filename)
+    }
+
+    // Resource id → filename cache backing resourceLocalUrl/resourceLocalFileURL,
+    // which the note list's row thumbnails hit per visible row per render. A
+    // resource's filename is derived from its id ("<id>.<ext>") and never changes,
+    // so cached hits can't go stale; entries are still removed on deleteResource
+    // and refreshed on saveResource for hygiene. Guarded by `lock` like all other
+    // DB state (UI reads on the main actor race the sync engine's actor otherwise).
+    private var resourceFilenameCache: [String: String] = [:]
+
+    private func resourceFilename(id: String) -> String? {
+        lock.lock()
+        if let cached = resourceFilenameCache[id] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
         var filename: String?
         withStatement("SELECT filename FROM resources WHERE id = ?") { stmt in
             bind(stmt, 1, id)
             if sqlite3_step(stmt) == SQLITE_ROW { filename = string(stmt, 0) }
         }
-        guard let filename, let dir = resourcesDirectory else { return nil }
-        return dir.appendingPathComponent(filename)
+        if let filename, !filename.isEmpty {
+            lock.lock()
+            resourceFilenameCache[id] = filename
+            lock.unlock()
+            return filename
+        }
+        return nil
     }
 
     /// [dirty] = has local bytes not yet pushed to Joplin Cloud. [synced] = Joplin Cloud
@@ -569,6 +615,9 @@ final class DatabaseManager {
             sqlite3_bind_int(stmt, 9, synced ? 1 : 0)
             sqlite3_step(stmt)
         }
+        lock.lock()
+        resourceFilenameCache[resource.id] = resource.filename
+        lock.unlock()
         // Link resource to note
         withStatement("INSERT OR IGNORE INTO note_resources (note_id, resource_id) VALUES (?, ?)") { stmt in
             bind(stmt, 1, resource.noteId)
@@ -630,6 +679,9 @@ final class DatabaseManager {
     }
 
     func deleteResource(id: String) {
+        lock.lock()
+        resourceFilenameCache.removeValue(forKey: id)
+        lock.unlock()
         // Remove file from disk
         if let dir = resourcesDirectory {
             // Find filename first
@@ -696,9 +748,20 @@ final class DatabaseManager {
         return ms == 0 ? nil : Date(timeIntervalSince1970: Double(ms) / 1000.0)
     }
 
+    // Matches sqlite3.h's SQLITE_TRANSIENT, which doesn't import into Swift (it's a
+    // C function-pointer cast macro). Tells SQLite to copy the text immediately.
+    private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
     // Typed binders
     private func bind(_ stmt: OpaquePointer, _ col: Int32, _ value: String) {
-        sqlite3_bind_text(stmt, col, (value as NSString).utf8String, -1, nil)
+        // SQLITE_TRANSIENT (not nil/SQLITE_STATIC) is required here: the previous
+        // `(value as NSString).utf8String` + nil destructor told SQLite the buffer
+        // would stay valid until the statement was finalized, but the bridged
+        // NSString is a temporary with no such guarantee under ARC — if it was
+        // deallocated before sqlite3_step, garbage or truncated text was written.
+        // Binding the Swift String directly gives a pointer valid for the call, and
+        // SQLITE_TRANSIENT makes SQLite copy it before returning.
+        sqlite3_bind_text(stmt, col, value, -1, Self.sqliteTransient)
     }
 
     private func bind(_ stmt: OpaquePointer, _ col: Int32, _ value: Date) {
