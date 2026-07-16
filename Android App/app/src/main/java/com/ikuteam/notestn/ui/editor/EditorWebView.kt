@@ -9,6 +9,7 @@ import android.net.Uri
 import android.view.ViewGroup
 import android.util.Log
 import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -16,7 +17,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.ikuteam.notestn.BuildConfig
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -45,6 +50,18 @@ fun EditorWebView(
     readOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    // Bumped when the WebView's render process dies (see onRenderProcessGone below)
+    // — re-keys the AndroidView so a fresh WebView is created in place of the dead
+    // one. Without this the editor silently rendered blank/broken until the app was
+    // killed and reopened.
+    var webViewGeneration by remember { mutableIntStateOf(0) }
+    // Theme last pushed into the page — `update` runs on every recomposition
+    // (including each frame of the keyboard animation, since EditorScreen reads the
+    // raw IME inset), and re-evaluating the same JS per frame is pointless bridge
+    // chatter. Plain holder (not MutableState): only read/written inside `update`.
+    val lastAppliedDark = remember { arrayOf<Boolean?>(null) }
+
+    key(webViewGeneration) {
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -132,6 +149,23 @@ fun EditorWebView(
                         // before first paint, but re-apply in case the page reloads.
                         applyDarkMode(view, darkTheme)
                     }
+
+                    // The OS can kill the WebView's sandboxed render process (memory
+                    // pressure, long background stretches). Returning true keeps the
+                    // whole app from being killed along with it (the default), and
+                    // re-keying the AndroidView swaps the dead WebView for a fresh
+                    // one — coordinator.isReady drops until the new page's "ready"
+                    // fires, at which point EditorScreen re-pushes the current
+                    // content. Previously the editor just went permanently blank.
+                    override fun onRenderProcessGone(
+                        view: WebView,
+                        detail: RenderProcessGoneDetail,
+                    ): Boolean {
+                        Log.w("EditorWebView", "Render process gone (crashed=${detail.didCrash()}) — recreating editor")
+                        coordinator.notifyEditorReset()
+                        webViewGeneration++
+                        return true
+                    }
                 }
 
                 coordinator.webView = this
@@ -148,11 +182,24 @@ fun EditorWebView(
                 loadUrl("https://appassets.androidplatform.net/assets/editor.html?theme=$themeParam$readOnlyParam&platform=android")
             }
         },
-        update = { webView -> applyDarkMode(webView, darkTheme) },
+        update = { webView ->
+            if (lastAppliedDark[0] != darkTheme) {
+                lastAppliedDark[0] = darkTheme
+                applyDarkMode(webView, darkTheme)
+            }
+        },
+        // onRelease (not DisposableEffect) so cleanup gets the exact WebView instance
+        // being released. destroy() matters: a WebView is a native browser instance,
+        // and this app creates one per opened note — without destroy(), each one's
+        // renderer memory lingered until finalizers ran, degrading the whole app
+        // over a long session (another "fixed by restarting" symptom).
+        onRelease = { webView ->
+            if (coordinator.webView === webView) coordinator.webView = null
+            webView.stopLoading()
+            webView.removeJavascriptInterface("AndroidBridge")
+            webView.destroy()
+        },
     )
-
-    DisposableEffect(Unit) {
-        onDispose { coordinator.webView = null }
     }
 }
 

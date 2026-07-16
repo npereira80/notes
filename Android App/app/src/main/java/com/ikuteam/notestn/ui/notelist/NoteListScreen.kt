@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -55,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,6 +67,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -89,6 +93,9 @@ import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
 import com.ikuteam.notestn.viewmodel.NotesViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -118,6 +125,19 @@ private sealed class NoteGroup(val order: Int) {
         is Month -> java.time.Month.of(month).getDisplayName(TextStyle.FULL, Locale.getDefault())
         is Year -> year.toString()
     }
+
+    // Stable LazyColumn key. The old "header-${hashCode()}" mixed identity hashes
+    // (the singleton objects) with structural hashes (the data classes) — a collision
+    // between any two would crash with a duplicate-key exception.
+    val key: String
+        get() = when (this) {
+            Today -> "today"
+            Yesterday -> "yesterday"
+            Previous7Days -> "previous7"
+            Previous30Days -> "previous30"
+            is Month -> "month-$month"
+            is Year -> "year-$year"
+        }
 }
 
 private val zone: ZoneId = ZoneId.systemDefault()
@@ -176,7 +196,13 @@ fun NoteListScreen(
     val selectedFolder by viewModel.selectedFolder.collectAsStateWithLifecycle()
     val isFocusingSearch by viewModel.isFocusingSearch.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val syncError by viewModel.syncError.collectAsStateWithLifecycle()
+    // Read once at screen level instead of inside each row's lambda — reading the
+    // state per row made every visible row recompose whenever focus flipped between
+    // the list and the editor (two-pane); this way only the selected row's
+    // parameters actually change.
+    val editorFocused = viewModel.isEditorFocused
     val darkTheme = isSystemInDarkTheme()
     val groupedBackground = if (darkTheme) GroupedBackgroundDark else GroupedBackgroundLight
     val cardBackground = if (darkTheme) CardBackgroundDark else CardBackgroundLight
@@ -186,7 +212,13 @@ fun NoteListScreen(
     // search bar / new note button (see BackdropBlurState above).
     val blurState = rememberBackdropBlurState()
 
-    val today = remember { LocalDate.now(zone) }
+    // Keyed on the note lists (not remember {} with no keys): a plain remember froze
+    // "today" at whatever date the screen first composed on. In an app that stays in
+    // memory for days, every "Today"/"Yesterday" label and date group was wrong after
+    // midnight until the app was killed and reopened — one of the "temporary visual
+    // glitches fixed by restart". Any data refresh (sync, edit, folder switch)
+    // re-evaluates it now.
+    val today = remember(liveNotes, trashedNotes) { LocalDate.now(ZoneId.systemDefault()) }
     val currentYear = today.year
 
     val navTitle = when {
@@ -253,8 +285,14 @@ fun NoteListScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize().captureForBackdropBlur(blurState)) {
-            if (isSyncing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            // Fixed-height slot (the indicator's own default height) rather than
+            // conditionally inserting the indicator — inserting it shifted the whole
+            // list down and back up every time the 2s-debounced background push ran,
+            // i.e. periodically while typing in the two-pane layout.
+            Box(modifier = Modifier.fillMaxWidth().height(4.dp)) {
+                if (isSyncing) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
             }
             if (syncError != null) {
                 Row(
@@ -272,12 +310,17 @@ fun NoteListScreen(
                 }
             }
             PullToRefreshBox(
-                isRefreshing = isSyncing,
+                // isRefreshing (user-initiated), not isSyncing — driving this with
+                // isSyncing made the refresh spinner flash into view for every
+                // 2s-debounced background push (i.e. after each pause in typing on
+                // two-pane devices). Background sync activity still shows in the
+                // slim progress bar above.
+                isRefreshing = isRefreshing,
                 // Plain sync, not force — force skips the local-vs-remote timestamp
                 // check entirely (see JoplinSyncEngine.upsertNote), which would let a
                 // pull-to-refresh run right after a not-yet-pushed local delete
                 // overwrite it with the still-undeleted server copy, undoing it.
-                onRefresh = { viewModel.syncNow() },
+                onRefresh = { viewModel.refreshNow() },
                 modifier = Modifier.weight(1f),
             ) {
             if (notes.isEmpty()) {
@@ -292,7 +335,7 @@ fun NoteListScreen(
                             note = note,
                             dateString = rowDateString(note, today),
                             selected = note.id == selectedNoteId,
-                            editorFocused = viewModel.isEditorFocused,
+                            editorFocused = editorFocused,
                             isTrash = isTrash,
                             onClick = { onNoteClick(note) },
                             onDelete = { viewModel.deleteNote(note) },
@@ -306,16 +349,23 @@ fun NoteListScreen(
                 // Pinning only applies to live notes — pulled out of their date group
                 // into their own section (first, like Apple Notes) so a note doesn't
                 // appear twice.
-                val pinnedNotes = if (isTrash) emptyList() else notes.filter { it.isPinned }.sortedByDescending { it.updatedTime }
-                val unpinnedNotes = if (isTrash) notes else notes.filterNot { it.isPinned }
-                val grouped = unpinnedNotes.groupBy { groupFor(it, today) }
-                    .toSortedMap(
-                        compareBy(
-                            { it.order },
-                            { (it as? NoteGroup.Month)?.month?.let { m -> -m } ?: 0 },
-                            { (it as? NoteGroup.Year)?.year?.let { y -> -y } ?: 0 }
+                // remember()ed — filtering, grouping and sorting the whole list used
+                // to re-run on every recomposition (every keystroke-save, sync tick,
+                // selection change), not just when the data actually changed.
+                val pinnedNotes = remember(notes, isTrash) {
+                    if (isTrash) emptyList() else notes.filter { it.isPinned }.sortedByDescending { it.updatedTime }
+                }
+                val grouped = remember(notes, isTrash, today) {
+                    val unpinnedNotes = if (isTrash) notes else notes.filterNot { it.isPinned }
+                    unpinnedNotes.groupBy { groupFor(it, today) }
+                        .toSortedMap(
+                            compareBy(
+                                { it.order },
+                                { (it as? NoteGroup.Month)?.month?.let { m -> -m } ?: 0 },
+                                { (it as? NoteGroup.Year)?.year?.let { y -> -y } ?: 0 }
+                            )
                         )
-                    )
+                }
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -330,37 +380,16 @@ fun NoteListScreen(
                                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
                             )
                         }
-                        item(key = "card-pinned") {
-                            Surface(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                color = cardBackground,
-                            ) {
-                                Column {
-                                    pinnedNotes.forEachIndexed { index, note ->
-                                        NoteRow(
-                                            note = note,
-                                            dateString = rowDateString(note, today),
-                                            selected = note.id == selectedNoteId,
-                                            editorFocused = viewModel.isEditorFocused,
-                                            isTrash = false,
-                                            onClick = { onNoteClick(note) },
-                                            onDelete = { viewModel.deleteNote(note) },
-                                            onRestore = { viewModel.restoreNote(note) },
-                                            onPermanentDelete = { viewModel.permanentlyDeleteNote(note) },
-                                            onTogglePin = { viewModel.togglePin(note) },
-                                        )
-                                        if (index != pinnedNotes.lastIndex) {
-                                            HorizontalDivider(
-                                                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
-                                                thickness = 0.5.dp,
-                                                color = MaterialTheme.colorScheme.outlineVariant,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        noteCardRows(
+                            notes = pinnedNotes,
+                            today = today,
+                            selectedNoteId = selectedNoteId,
+                            editorFocused = editorFocused,
+                            isTrash = false,
+                            cardBackground = cardBackground,
+                            viewModel = viewModel,
+                            onNoteClick = onNoteClick,
+                        )
                     }
                     if (isTrash && trashedFolders.isNotEmpty()) {
                         item(key = "header-trashed-notebooks") {
@@ -397,7 +426,7 @@ fun NoteListScreen(
                         }
                     }
                     grouped.forEach { (group, groupNotes) ->
-                        item(key = "header-${group.hashCode()}") {
+                        item(key = "header-${group.key}") {
                             Text(
                                 group.title(currentYear),
                                 style = MaterialTheme.typography.headlineSmall,
@@ -405,39 +434,21 @@ fun NoteListScreen(
                                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
                             )
                         }
-                        item(key = "card-${group.hashCode()}") {
-                            // All notes in this section share one rounded card, with thin
-                            // dividers between rows — mirrors the iOS Notes list grouping.
-                            Surface(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                color = cardBackground,
-                            ) {
-                                Column {
-                                    groupNotes.forEachIndexed { index, note ->
-                                        NoteRow(
-                                            note = note,
-                                            dateString = rowDateString(note, today),
-                                            selected = note.id == selectedNoteId,
-                                            editorFocused = viewModel.isEditorFocused,
-                                            isTrash = isTrash,
-                                            onClick = { onNoteClick(note) },
-                                            onDelete = { viewModel.deleteNote(note) },
-                                            onRestore = { viewModel.restoreNote(note) },
-                                            onPermanentDelete = { viewModel.permanentlyDeleteNote(note) },
-                                            onTogglePin = { viewModel.togglePin(note) },
-                                        )
-                                        if (index != groupNotes.lastIndex) {
-                                            HorizontalDivider(
-                                                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
-                                                thickness = 0.5.dp,
-                                                color = MaterialTheme.colorScheme.outlineVariant,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // One LazyColumn item PER ROW (see noteCardRows) instead of one
+                        // giant item wrapping the whole group — LazyColumn can't
+                        // virtualize inside an item, so a month group with 100+ notes
+                        // used to compose and measure every row in a single frame the
+                        // moment it scrolled into view, defeating lazy lists entirely.
+                        noteCardRows(
+                            notes = groupNotes,
+                            today = today,
+                            selectedNoteId = selectedNoteId,
+                            editorFocused = editorFocused,
+                            isTrash = isTrash,
+                            cardBackground = cardBackground,
+                            viewModel = viewModel,
+                            onNoteClick = onNoteClick,
+                        )
                     }
                 }
             }
@@ -457,6 +468,61 @@ fun NoteListScreen(
                 TextButton(onClick = { confirmEmptyTrash = false }) { Text("Cancel") }
             },
         )
+    }
+}
+
+// MARK: - Per-row card items
+
+/**
+ * Emits one LazyColumn item per note, drawn so the section still reads as a single
+ * rounded card (first/last corners rounded, hairline dividers between rows) —
+ * visually identical to the old one-Surface-per-group approach, but each row is its
+ * own lazily-composed item. See the call site comment in NoteListScreen.
+ */
+private fun LazyListScope.noteCardRows(
+    notes: List<Note>,
+    today: LocalDate,
+    selectedNoteId: String?,
+    editorFocused: Boolean,
+    isTrash: Boolean,
+    cardBackground: Color,
+    viewModel: NotesViewModel,
+    onNoteClick: (Note) -> Unit,
+) {
+    itemsIndexed(notes, key = { _, note -> note.id }) { index, note ->
+        val shape = when {
+            notes.size == 1 -> RoundedCornerShape(14.dp)
+            index == 0 -> RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
+            index == notes.lastIndex -> RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp)
+            else -> RectangleShape
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .clip(shape)
+                .background(cardBackground),
+        ) {
+            NoteRow(
+                note = note,
+                dateString = rowDateString(note, today),
+                selected = note.id == selectedNoteId,
+                editorFocused = editorFocused,
+                isTrash = isTrash,
+                onClick = { onNoteClick(note) },
+                onDelete = { viewModel.deleteNote(note) },
+                onRestore = { viewModel.restoreNote(note) },
+                onPermanentDelete = { viewModel.permanentlyDeleteNote(note) },
+                onTogglePin = { viewModel.togglePin(note) },
+            )
+            if (index != notes.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+            }
+        }
     }
 }
 
@@ -628,8 +694,20 @@ private fun NoteRow(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    val thumbnailFile = remember(note.id, note.body) {
-        note.firstImageResourceId?.let { DatabaseManager.shared.resourceLocalFile(it) }
+    // produceState on Dispatchers.IO — resourceLocalFile is a synchronous SQLite
+    // query, and the old remember(note.id, note.body) ran it on the main thread for
+    // every row entering composition (and re-ran it on every keystroke-save of the
+    // open note, since the body changed). During a sync the DB is busy writing, so
+    // those main-thread reads visibly hitched the list. Keyed on the (cached)
+    // firstImageResourceId, so body edits that don't change the first image don't
+    // re-query at all.
+    val thumbnailFile by produceState<File?>(initialValue = null, note.firstImageResourceId) {
+        val resourceId = note.firstImageResourceId
+        value = if (resourceId == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) { DatabaseManager.shared.resourceLocalFile(resourceId) }
+        }
     }
     val darkTheme = isSystemInDarkTheme()
 

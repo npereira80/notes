@@ -25,6 +25,23 @@ class EditorCoordinator {
     var isReady by mutableStateOf(false)
         private set
 
+    // The last content this editor is known to hold — written by setContent (what we
+    // pushed in) and by the contentChanged message (what the user typed). Lets
+    // EditorScreen tell a sync-pulled external change (DB body differs from this →
+    // refresh the editor) from the echo of its own saves (identical → ignore),
+    // without reloading the WebView. Mirrors Mac's EditorCoordinator.
+    var lastKnownTitle: String = ""
+        private set
+    var lastKnownBody: String = ""
+        private set
+
+    /** Called when the WebView is being recreated (e.g. after its render process
+     * died — see EditorWebView's onRenderProcessGone) so content gets re-pushed
+     * once the fresh page signals ready again. */
+    fun notifyEditorReset() {
+        isReady = false
+    }
+
     // Set by EditorWebView's AndroidView factory, cleared on dispose.
     var webView: WebView? = null
 
@@ -48,7 +65,11 @@ class EditorCoordinator {
 
         when (message.type) {
             "ready" -> isReady = true
-            "contentChanged" -> message.html?.let { onContentChanged?.invoke(message.title ?: "", it) }
+            "contentChanged" -> message.html?.let {
+                lastKnownTitle = message.title ?: ""
+                lastKnownBody = it
+                onContentChanged?.invoke(message.title ?: "", it)
+            }
             "selectionChanged" -> message.selectionState?.let { selectionState = it }
             "imageRequested" -> message.html?.let { onImageRequested?.invoke(it) }
             "openUrl" -> message.url?.let { onOpenUrl?.invoke(it) }
@@ -61,6 +82,8 @@ class EditorCoordinator {
 
     fun setContent(title: String, body: String) {
         val wv = webView ?: return
+        lastKnownTitle = title
+        lastKnownBody = body
         val encodedTitle = jsonCoder.encodeToString(title)
         val encodedBody = jsonCoder.encodeToString(body)
         wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.setContent($encodedTitle, $encodedBody)", null) }

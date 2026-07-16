@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -85,6 +86,13 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
+    // User-initiated refresh (pull-to-refresh) only — distinct from isSyncing, which
+    // also covers background pushes (the 2s debounce after every edit). Driving the
+    // pull-to-refresh spinner with isSyncing made it flash into view every few
+    // seconds while typing. See refreshNow().
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private val _syncError = MutableStateFlow<String?>(null)
     val syncError: StateFlow<String?> = _syncError.asStateFlow()
 
@@ -99,6 +107,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     // MARK: - Init
+
+    // Declared before init{} (which registers it) — see the registration comment
+    // below for why this is a named field instead of an anonymous object.
+    private val foregroundSyncObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            syncNow()
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -124,11 +140,16 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         // silently replaced (see runSync's Unauthorized handling) before the user
         // notices. ProcessLifecycleOwner fires ON_START at the app level (any Activity
         // resuming from background), not per-Activity onResume.
-        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) {
-                syncNow()
-            }
-        })
+        // Kept as a field and removed in onCleared() — ProcessLifecycleOwner is a
+        // process-wide singleton, so an anonymous observer added here would hold this
+        // ViewModel (and its sync engine) forever, and re-entering the app after the
+        // Activity was destroyed would stack a second observer (duplicate syncs).
+        ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundSyncObserver)
+    }
+
+    override fun onCleared() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(foregroundSyncObserver)
+        super.onCleared()
     }
 
     // MARK: - Joplin Cloud sync (pull + push, see JoplinSyncEngine)
@@ -190,6 +211,26 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         _syncError.value = null
     }
 
+    /** Pull-to-refresh entry point — a plain (non-force) sync, but tracked in
+     * [isRefreshing] so the pull spinner only reflects refreshes the user asked for,
+     * not background pushes. syncNow() is fire-and-forget, so this waits on
+     * [isSyncing] to know when to drop the spinner. */
+    fun refreshNow() {
+        if (_isRefreshing.value) return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            try {
+                syncNow()
+                // syncNow always flips isSyncing true inside its own launch (even the
+                // not-logged-in failure path), so both waits complete.
+                _isSyncing.first { it }
+                _isSyncing.first { !it }
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
+    }
+
     // MARK: - Push debounce
 
     private var pushDebounceJob: Job? = null
@@ -203,6 +244,9 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         pushDebounceJob?.cancel()
         pushDebounceJob = viewModelScope.launch {
             delay(2000)
+            // Re-checked after the delay: a logout during the 2s window would
+            // otherwise surface a spurious "Not logged in" sync error.
+            if (JoplinAccountStore.shared.account.value == null) return@launch
             syncNow()
         }
     }
@@ -229,7 +273,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             val query = _searchText.value
             if (query.isNotEmpty()) db.searchNotes(query) else db.fetchNotes(_selectedFolderId.value)
         }
-        _trashedNotes.value = withContext(Dispatchers.IO) { db.fetchTrashedNotes() }
+        // Trashed notes are only visible while Trash is selected — skipping the fetch
+        // otherwise avoids loading every trashed note's full body on every call (this
+        // runs after each sync, including the 2s-debounced push while typing).
+        // selectTrash() re-runs loadNotes(), so the list is always fresh by the time
+        // Trash is actually shown.
+        if (_isTrashSelected.value) {
+            _trashedNotes.value = withContext(Dispatchers.IO) { db.fetchTrashedNotes() }
+        }
     }
 
     // MARK: - Folder actions
@@ -246,6 +297,9 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         _isTrashSelected.value = true
         _selectedFolderId.value = null
         _selectedNoteId.value = null
+        // trashedNotes is only kept fresh while Trash is selected (see loadNotes) —
+        // refresh it now that it's about to be shown.
+        viewModelScope.launch { loadNotes() }
     }
 
     fun createFolder(title: String = "New Notebook") {
@@ -382,12 +436,48 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 db.saveNote(updated, dirty = true, synced = wasSynced)
                 // An image removed from the body (but the note itself kept) leaves an
                 // orphaned resource behind — clean it up the same way a deleted note's
-                // resources are cleaned up below.
-                if (previousBody != null) unlinkRemovedResources(note.id, previousBody, updated.body)
+                // resources are cleaned up below. The regex scan runs over both full
+                // bodies, so the cheap contains() pre-check skips it entirely for
+                // image-less notes — this runs on every editor save (i.e. while typing).
+                if (previousBody != null &&
+                    (previousBody.contains("data-resource-id") || updated.body.contains("data-resource-id"))
+                ) {
+                    unlinkRemovedResources(note.id, previousBody, updated.body)
+                }
             }
-            // Refresh list without losing selection
-            _notes.value = withContext(Dispatchers.IO) { db.fetchNotes(_selectedFolderId.value) }
+            // Update the one changed row in place instead of re-fetching the whole
+            // folder (which loaded every note's full body per editor save, and also
+            // silently replaced active search results with the unfiltered folder
+            // list). The list deliberately keeps its current order while editing —
+            // it re-sorts by updated_time on the next loadNotes() (folder switch,
+            // sync, launch), so the row being edited doesn't jump around mid-typing.
+            val current = _notes.value
+            if (current.any { it.id == updated.id }) {
+                _notes.value = current.map { if (it.id == updated.id) updated else it }
+            } else if (_trashedNotes.value.any { it.id == updated.id }) {
+                _trashedNotes.value = _trashedNotes.value.map { if (it.id == updated.id) updated else it }
+            } else {
+                loadNotes()
+            }
             schedulePushDebounce()
+        }
+    }
+
+    /**
+     * Editor save path — looks the note up fresh by id instead of trusting a Note the
+     * caller captured when the editor opened. The editor's content-changed callback
+     * used to hold that stale snapshot for the whole editing session, so any change
+     * made elsewhere meanwhile (pin/unpin from the list, a folder move, a sync pull)
+     * was silently reverted to the snapshot's values on the next keystroke-save —
+     * exactly the kind of stale state that only a restart used to clear.
+     */
+    fun saveNoteContent(noteId: String, title: String, body: String) {
+        viewModelScope.launch {
+            val existing = _notes.value.firstOrNull { it.id == noteId }
+                ?: _trashedNotes.value.firstOrNull { it.id == noteId }
+                ?: withContext(Dispatchers.IO) { db.fetchNote(noteId) }
+                ?: return@launch
+            saveNote(existing.copy(title = title, body = body))
         }
     }
 
@@ -519,14 +609,31 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     // MARK: - Search
 
+    private var searchJob: Job? = null
+
+    // The actual query is debounced and single-flight: searchNotes is an unindexed
+    // LIKE scan over every note's title and full body, so launching one per keystroke
+    // queued overlapping full-table scans whose completions could land out of order
+    // (an older query's results overwriting a newer one's). Cancelling the previous
+    // job fixes the race; the 250ms debounce fixes the cost. Clearing refreshes
+    // immediately (fetchNotes by folder is cheap and it feels snappier).
     fun search(query: String) {
         _searchText.value = query
-        viewModelScope.launch { loadNotes() }
+        searchJob?.cancel()
+        if (query.isEmpty()) {
+            searchJob = viewModelScope.launch { loadNotes() }
+            return
+        }
+        searchJob = viewModelScope.launch {
+            delay(250)
+            loadNotes()
+        }
     }
 
     fun clearSearch() {
         _searchText.value = ""
-        viewModelScope.launch { loadNotes() }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch { loadNotes() }
     }
 
     // MARK: - Search focus request (Ctrl+F parity — see NotesTNApp.swift Find… command)

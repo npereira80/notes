@@ -89,9 +89,17 @@ class JoplinSyncEngine(context: Context) {
 
                 if (change.type == CHANGE_TYPE_DELETE) {
                     // Only remove local rows that a previous pull created — never
-                    // touch notes that only ever existed locally.
+                    // touch items that only ever existed locally. A delta delete
+                    // doesn't say what type the item was (the content is already gone
+                    // server-side), so try all three tables: ids are globally unique
+                    // in Joplin, so the two misses are safe no-ops. Handling only
+                    // notes here meant a notebook or resource deleted on another
+                    // device stayed around locally forever (ghost folders that not
+                    // even an app restart cleared).
                     val id = itemName.removeSuffix(".md")
                     db.deleteNote(id)
+                    db.deleteFolder(id)
+                    db.deleteResource(id)
                     continue
                 }
 

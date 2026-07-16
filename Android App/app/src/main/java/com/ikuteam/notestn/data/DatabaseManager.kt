@@ -307,6 +307,20 @@ class DatabaseManager private constructor(context: Context) :
         return notes
     }
 
+    /** Single note by id (live or trashed), or null if it doesn't exist. */
+    fun fetchNote(id: String): Note? {
+        readableDatabase.rawQuery(
+            """
+            SELECT id, parent_id, title, body, created_time, updated_time, is_todo, todo_completed, deleted_time, is_pinned
+            FROM notes
+            WHERE id = ?
+            """.trimIndent(),
+            arrayOf(id)
+        ).use { c ->
+            return if (c.moveToFirst()) c.toNote() else null
+        }
+    }
+
     /** Null if the note doesn't exist locally yet. Used by sync to decide whether a
      * pulled remote item is newer than what's already stored. */
     fun noteUpdatedTime(id: String): Long? {

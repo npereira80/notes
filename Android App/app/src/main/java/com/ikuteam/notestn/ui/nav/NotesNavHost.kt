@@ -134,7 +134,10 @@ fun NotesNavHost(
                 EditorScreen(
                     note = note,
                     viewModel = viewModel,
-                    readOnly = trashedNotes.any { it.id == noteId },
+                    // From the note itself, not trashedNotes membership — trashedNotes
+                    // is only kept fresh while Trash is selected (see loadNotes), so a
+                    // stale snapshot could mark a live note read-only here.
+                    readOnly = note.deletedTime != null,
                     onBack = { navController.popBackStack() },
                 )
             }

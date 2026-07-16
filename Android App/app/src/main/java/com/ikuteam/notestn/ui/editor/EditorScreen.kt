@@ -142,8 +142,15 @@ fun EditorScreen(
         // so it scrolls with the body instead of sitting in a separate native
         // field — one combined callback replaces the old separate title/body
         // debounce paths.
+        //
+        // saveNoteContent (by id) instead of saveNote(note.copy(...)) — this effect
+        // only re-runs on note.id changes, so the `note` captured here is a snapshot
+        // from when the note was opened. Saving through that snapshot silently
+        // reverted anything changed elsewhere mid-session (pin/unpin from the list,
+        // a folder move, a sync pull) on the next keystroke-save — stale state that
+        // previously only clearing the app fixed.
         coordinator.onContentChanged = { title, body ->
-            viewModel.saveNote(note.copy(title = title, body = body))
+            viewModel.saveNoteContent(note.id, title, body)
         }
         coordinator.onImageRequested = { dataUri ->
             scope.launch {
@@ -171,9 +178,27 @@ fun EditorScreen(
         onDispose { viewModel.isEditorFocused = false }
     }
 
-    // Push initial content once the WebView bundle signals it's ready.
+    // Push initial content once the WebView bundle signals it's ready. Also re-runs
+    // if isReady drops back to false and returns (WebView recreated after its render
+    // process died — see EditorWebView's onRenderProcessGone), re-pushing the
+    // current content instead of leaving a blank editor until app restart.
     LaunchedEffect(coordinator.isReady, note.id) {
         if (coordinator.isReady) coordinator.setContent(note.title, note.body)
+    }
+
+    // A sync pull that updates the currently open note used to leave the editor
+    // showing the old content (content was only pushed once per note id) — the list
+    // preview and the editor would disagree until the note was reopened or the app
+    // restarted, and the next keystroke-save would overwrite the pulled remote edit
+    // with the stale editor content. The lastKnown* comparison keeps this from
+    // reacting to the echo of the editor's own saves (`note` here is the fresh
+    // object passed down by the nav layer on every list emission). Same fix as the
+    // Mac/iPad clients.
+    LaunchedEffect(note.updatedTime) {
+        if (!coordinator.isReady) return@LaunchedEffect
+        if (note.title != coordinator.lastKnownTitle || note.body != coordinator.lastKnownBody) {
+            coordinator.setContent(note.title, note.body)
+        }
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
