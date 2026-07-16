@@ -12,9 +12,11 @@ android {
 
     defaultConfig {
         applicationId = "com.ikuteam.notestn"
-        // API 26 (Android 8.0) covers the vast majority of active devices while still
-        // giving us WebViewAssetLoader, notification channels, etc.
-        minSdk = 26
+        // API 31 (Android 12) — raised from 26 specifically for the note list's
+        // hand-rolled backdrop blur (search bar / new note button), which needs
+        // android.graphics.RenderEffect / Compose's GraphicsLayer.renderEffect, both
+        // API 31+ only with no lower-API fallback implemented.
+        minSdk = 31
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -35,6 +37,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -50,6 +53,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.material3WindowSizeClass)
     implementation(libs.androidx.webkit)
