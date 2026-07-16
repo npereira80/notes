@@ -87,50 +87,29 @@ object MarkdownToHtml {
                     html.append("<blockquote><p>").append(inline(quoteLines.joinToString(" "))).append("</p></blockquote>\n")
                 }
 
-                checklistRegex.matches(line) -> {
-                    html.append("<ul data-is-checklist=\"true\">\n")
-                    while (i < lines.size && checklistRegex.matches(lines[i])) {
-                        val match = checklistRegex.find(lines[i])!!
-                        val checked = match.groupValues[2].lowercase() == "x"
-                        val text = inline(match.groupValues[3])
-                        // Class must be "md-checkbox" (checked items: "md-checkbox checked") —
-                        // that's what schema.ts's task_list_item.parseDOM matches on
-                        // (`li.md-checkbox`), vs. list_item's `li:not(.md-checkbox)`. Getting
-                        // this wrong makes ProseMirror parse these as plain list items instead
-                        // of task items, silently turning the whole list into a bullet list.
-                        if (checked) {
-                            html.append("<li class=\"md-checkbox checked\"><input type=\"checkbox\" checked><div>").append(text).append("</div></li>\n")
-                        } else {
-                            html.append("<li class=\"md-checkbox\"><input type=\"checkbox\"><div>").append(text).append("</div></li>\n")
-                        }
+                parseListLine(line) != null -> {
+                    // One combined branch for bullet / ordered / checklist lists, gathering
+                    // the whole run of (possibly indented) list lines and reconstructing
+                    // nesting from their indentation — see renderListBlock. Previously each
+                    // list type had its own branch whose regex was anchored at column 0, so
+                    // an indented sub-bullet ("  - child") wasn't recognized as a list item
+                    // at all: it fell through to the paragraph branch and rendered as literal
+                    // "- child" text (and several sub-items merged into one "- a  - b"
+                    // paragraph). This is the nested-list round-trip bug.
+                    val items = mutableListOf<ListLine>()
+                    while (i < lines.size && lines[i].isNotBlank()) {
+                        val pl = parseListLine(lines[i]) ?: break
+                        items.add(pl)
                         i++
                     }
-                    html.append("</ul>\n")
-                }
-
-                bulletRegex.matches(line) -> {
-                    html.append("<ul>\n")
-                    while (i < lines.size && bulletRegex.matches(lines[i])) {
-                        html.append("<li>").append(inline(bulletRegex.find(lines[i])!!.groupValues[2])).append("</li>\n")
-                        i++
-                    }
-                    html.append("</ul>\n")
-                }
-
-                orderedRegex.matches(line) -> {
-                    html.append("<ol>\n")
-                    while (i < lines.size && orderedRegex.matches(lines[i])) {
-                        html.append("<li>").append(inline(orderedRegex.find(lines[i])!!.groupValues[2])).append("</li>\n")
-                        i++
-                    }
-                    html.append("</ol>\n")
+                    html.append(renderListBlock(items)).append("\n")
                 }
 
                 else -> {
                     val paragraphLines = mutableListOf<String>()
                     while (i < lines.size && lines[i].isNotBlank() &&
-                        !headingRegex.matches(lines[i]) && !bulletRegex.matches(lines[i]) &&
-                        !orderedRegex.matches(lines[i]) && !blockquoteRegex.matches(lines[i]) &&
+                        !headingRegex.matches(lines[i]) && parseListLine(lines[i]) == null &&
+                        !blockquoteRegex.matches(lines[i]) &&
                         !lines[i].trimStart().startsWith("```") && !hrRegex.matches(lines[i].trim()) &&
                         !isTableStart(lines, i)
                     ) {
@@ -143,6 +122,102 @@ object MarkdownToHtml {
         }
 
         return html.toString().trim()
+    }
+
+    // MARK: - Lists (nesting-aware)
+
+    private enum class ListKind { BULLET, ORDERED, CHECKLIST }
+    private data class ListLine(val indent: Int, val kind: ListKind, val checked: Boolean, val text: String)
+
+    /** Leading-whitespace width of a line (tab counts as 4). Used only to compare
+     * nesting depth between list items — the absolute value doesn't matter, only the
+     * relative ordering, so any consistent indent width (our own 2 spaces, Joplin
+     * desktop's 4, a tab) reconstructs the same nesting. */
+    private fun indentWidth(line: String): Int {
+        var width = 0
+        for (ch in line) {
+            when (ch) {
+                ' ' -> width += 1
+                '\t' -> width += 4
+                else -> return width
+            }
+        }
+        return width
+    }
+
+    /** Parses one line as a list item (allowing leading indentation), or null if it
+     * isn't one. Checklist is tried first because "- [ ] x" also matches the plain
+     * bullet pattern. */
+    private fun parseListLine(line: String): ListLine? {
+        val stripped = line.trimStart(' ', '\t')
+        val indent = indentWidth(line)
+        checklistRegex.matchEntire(stripped)?.let {
+            return ListLine(indent, ListKind.CHECKLIST, it.groupValues[2].lowercase() == "x", it.groupValues[3])
+        }
+        bulletRegex.matchEntire(stripped)?.let {
+            return ListLine(indent, ListKind.BULLET, false, it.groupValues[2])
+        }
+        orderedRegex.matchEntire(stripped)?.let {
+            return ListLine(indent, ListKind.ORDERED, false, it.groupValues[2])
+        }
+        return null
+    }
+
+    private fun listOpenTag(kind: ListKind): String = when (kind) {
+        ListKind.CHECKLIST -> "<ul data-is-checklist=\"true\">"
+        ListKind.ORDERED -> "<ol>"
+        ListKind.BULLET -> "<ul>"
+    }
+
+    private fun listCloseTag(kind: ListKind): String = if (kind == ListKind.ORDERED) "</ol>" else "</ul>"
+
+    private fun renderListItem(item: ListLine, child: String): String {
+        val inner = inline(item.text)
+        return if (item.kind == ListKind.CHECKLIST) {
+            // Class must be "md-checkbox" (checked: "md-checkbox checked") — that's what
+            // schema.ts's task_list_item.parseDOM matches on; getting it wrong makes
+            // ProseMirror parse these as plain list items.
+            val cls = if (item.checked) "md-checkbox checked" else "md-checkbox"
+            val chk = if (item.checked) " checked" else ""
+            "<li class=\"$cls\"><input type=\"checkbox\"$chk><div>$inner$child</div></li>"
+        } else {
+            "<li>$inner$child</li>"
+        }
+    }
+
+    /** Rebuilds nested `<ul>/<ol>` HTML from a run of list lines, using each line's
+     * indentation to decide nesting: an item indented deeper than the one before it
+     * becomes a child list of it; a shallower item pops back out. A change of kind at
+     * the same indent starts a sibling list (e.g. a bullet after a checklist item). */
+    private fun renderListBlock(items: List<ListLine>): String {
+        var pos = 0
+
+        fun build(levelIndent: Int): String {
+            val out = StringBuilder()
+            while (pos < items.size && items[pos].indent >= levelIndent) {
+                val curIndent = items[pos].indent
+                val curKind = items[pos].kind
+                out.append(listOpenTag(curKind))
+                while (pos < items.size && items[pos].indent == curIndent && items[pos].kind == curKind) {
+                    val item = items[pos]
+                    pos++
+                    var child = ""
+                    if (pos < items.size && items[pos].indent > curIndent) {
+                        child = build(items[pos].indent)
+                    }
+                    out.append(renderListItem(item, child))
+                }
+                out.append(listCloseTag(curKind))
+            }
+            return out.toString()
+        }
+
+        // Seed with the block's MINIMUM indent, not the first item's: build()'s outer
+        // loop only keeps items whose indent >= levelIndent, so if a later item in the
+        // run is shallower than the first (e.g. a loose list split by a blank line, or
+        // a stray indented item before a top-level one), seeding from the first item's
+        // indent would silently drop it. The minimum guarantees every item is emitted.
+        return build(items.minOfOrNull { it.indent } ?: 0)
     }
 
     /**

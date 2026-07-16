@@ -79,46 +79,29 @@ enum MarkdownToHtml {
                 }
                 html += "<blockquote><p>" + inline(quoteLines.joined(separator: " ")) + "</p></blockquote>\n"
 
-            } else if matches(checklistRegex, line) {
-                html += "<ul data-is-checklist=\"true\">\n"
-                while i < lines.count, let m = firstMatch(checklistRegex, lines[i]) {
-                    let checked = m.groups[1].lowercased() == "x"
-                    let text = inline(m.groups[2])
-                    // Class must be "md-checkbox" (checked items: "md-checkbox checked") —
-                    // that's what schema.ts's task_list_item.parseDOM matches on
-                    // (`li.md-checkbox`), vs. list_item's `li:not(.md-checkbox)`. Getting this
-                    // wrong makes ProseMirror parse these as plain list items instead of task
-                    // items, silently turning the whole list into a bullet list.
-                    if checked {
-                        html += "<li class=\"md-checkbox checked\"><input type=\"checkbox\" checked><div>" + text + "</div></li>\n"
-                    } else {
-                        html += "<li class=\"md-checkbox\"><input type=\"checkbox\"><div>" + text + "</div></li>\n"
-                    }
+            } else if parseListLine(line) != nil {
+                // One combined branch for bullet / ordered / checklist lists, gathering
+                // the whole run of (possibly indented) list lines and reconstructing
+                // nesting from their indentation — see renderListBlock. Previously each
+                // list type had its own branch whose regex was anchored at column 0, so
+                // an indented sub-bullet ("  - child") wasn't recognized as a list item
+                // at all: it fell through to the paragraph branch and rendered as literal
+                // "- child" text (and several sub-items merged into one "- a  - b"
+                // paragraph). This is the nested-list round-trip bug.
+                var items: [ListLine] = []
+                while i < lines.count,
+                      !lines[i].trimmingCharacters(in: .whitespaces).isEmpty,
+                      let pl = parseListLine(lines[i]) {
+                    items.append(pl)
                     i += 1
                 }
-                html += "</ul>\n"
-
-            } else if matches(bulletRegex, line) {
-                html += "<ul>\n"
-                while i < lines.count, let m = firstMatch(bulletRegex, lines[i]) {
-                    html += "<li>" + inline(m.groups[1]) + "</li>\n"
-                    i += 1
-                }
-                html += "</ul>\n"
-
-            } else if matches(orderedRegex, line) {
-                html += "<ol>\n"
-                while i < lines.count, let m = firstMatch(orderedRegex, lines[i]) {
-                    html += "<li>" + inline(m.groups[1]) + "</li>\n"
-                    i += 1
-                }
-                html += "</ol>\n"
+                html += renderListBlock(items) + "\n"
 
             } else {
                 var paragraphLines: [String] = []
                 while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).isEmpty &&
-                    !matches(headingRegex, lines[i]) && !matches(bulletRegex, lines[i]) &&
-                    !matches(orderedRegex, lines[i]) && !matches(blockquoteRegex, lines[i]) &&
+                    !matches(headingRegex, lines[i]) && parseListLine(lines[i]) == nil &&
+                    !matches(blockquoteRegex, lines[i]) &&
                     !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") &&
                     !matches(hrRegex, lines[i].trimmingCharacters(in: .whitespaces)) &&
                     !isTableStart(lines, i) {
@@ -130,6 +113,111 @@ enum MarkdownToHtml {
         }
 
         return html.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Lists (nesting-aware)
+
+    private enum ListKind { case bullet, ordered, checklist }
+    private struct ListLine {
+        let indent: Int
+        let kind: ListKind
+        let checked: Bool
+        let text: String
+    }
+
+    /// Leading-whitespace width of a line (tab counts as 4). Used only to compare
+    /// nesting depth between list items — the absolute value doesn't matter, only the
+    /// relative ordering, so any consistent indent width (our own 2 spaces, Joplin
+    /// desktop's 4, a tab) reconstructs the same nesting.
+    private static func indentWidth(_ line: String) -> Int {
+        var width = 0
+        for ch in line {
+            if ch == " " { width += 1 }
+            else if ch == "\t" { width += 4 }
+            else { break }
+        }
+        return width
+    }
+
+    /// Parses one line as a list item (allowing leading indentation), or nil if it
+    /// isn't one. Checklist is tried first because "- [ ] x" also matches the plain
+    /// bullet pattern.
+    private static func parseListLine(_ line: String) -> ListLine? {
+        let stripped = String(line.drop(while: { $0 == " " || $0 == "\t" }))
+        let indent = indentWidth(line)
+        if let m = firstMatch(checklistRegex, stripped) {
+            return ListLine(indent: indent, kind: .checklist, checked: m.groups[1].lowercased() == "x", text: m.groups[2])
+        }
+        if let m = firstMatch(bulletRegex, stripped) {
+            return ListLine(indent: indent, kind: .bullet, checked: false, text: m.groups[1])
+        }
+        if let m = firstMatch(orderedRegex, stripped) {
+            return ListLine(indent: indent, kind: .ordered, checked: false, text: m.groups[1])
+        }
+        return nil
+    }
+
+    private static func listOpenTag(_ kind: ListKind) -> String {
+        switch kind {
+        case .checklist: return "<ul data-is-checklist=\"true\">"
+        case .ordered:   return "<ol>"
+        case .bullet:    return "<ul>"
+        }
+    }
+
+    private static func listCloseTag(_ kind: ListKind) -> String {
+        kind == .ordered ? "</ol>" : "</ul>"
+    }
+
+    private static func renderListItem(_ item: ListLine, child: String) -> String {
+        let inner = inline(item.text)
+        switch item.kind {
+        case .checklist:
+            // Class must be "md-checkbox" (checked: "md-checkbox checked") — that's what
+            // schema.ts's task_list_item.parseDOM matches on; getting it wrong makes
+            // ProseMirror parse these as plain list items.
+            let cls = item.checked ? "md-checkbox checked" : "md-checkbox"
+            let chk = item.checked ? " checked" : ""
+            return "<li class=\"\(cls)\"><input type=\"checkbox\"\(chk)><div>\(inner)\(child)</div></li>"
+        default:
+            return "<li>\(inner)\(child)</li>"
+        }
+    }
+
+    /// Rebuilds nested `<ul>/<ol>` HTML from a run of list lines, using each line's
+    /// indentation to decide nesting: an item indented deeper than the one before it
+    /// becomes a child list of it; a shallower item pops back out. A change of kind at
+    /// the same indent starts a sibling list (e.g. a bullet after a checklist item).
+    private static func renderListBlock(_ items: [ListLine]) -> String {
+        var pos = 0
+
+        func build(_ levelIndent: Int) -> String {
+            var out = ""
+            while pos < items.count && items[pos].indent >= levelIndent {
+                let curIndent = items[pos].indent
+                let curKind = items[pos].kind
+                out += listOpenTag(curKind)
+                while pos < items.count && items[pos].indent == curIndent && items[pos].kind == curKind {
+                    let item = items[pos]
+                    pos += 1
+                    var child = ""
+                    if pos < items.count && items[pos].indent > curIndent {
+                        child = build(items[pos].indent)
+                    }
+                    out += renderListItem(item, child: child)
+                }
+                out += listCloseTag(curKind)
+            }
+            return out
+        }
+
+        // Seed with the block's MINIMUM indent, not the first item's: build()'s outer
+        // loop only keeps items whose indent >= levelIndent, so if a later item in the
+        // run is shallower than the first (e.g. a loose list split by a blank line, or
+        // a stray indented item before a top-level one), seeding from the first item's
+        // indent would silently drop it. The minimum guarantees every item is emitted.
+        let minIndent = items.map { $0.indent }.min() ?? 0
+        return build(minIndent)
     }
 
     /// Strips a leading YAML frontmatter block (e.g. from notes imported from other
