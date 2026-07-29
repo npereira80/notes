@@ -109,12 +109,27 @@ class EditorCoordinator {
         wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.collapseSelection()", null) }
     }
 
+    /** Toggles the editor between read mode (false) and edit mode (true) — see the
+     * setEditable/`editable` handling in Mac/EditorBundle/src/index.ts. In read mode
+     * the editor is contentEditable=false, so a tap interacts with content (link,
+     * task checkbox, text selection) and never pops the keyboard. */
+    fun setEditable(editable: Boolean) {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.setEditable($editable)", null) }
+    }
+
     fun focus() {
         val wv = webView ?: return
         wv.post {
             wv.requestFocus()
             wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.focus()", null)
         }
+    }
+
+    /** Drops editor focus (dismisses the keyboard) — used when leaving edit mode. */
+    fun blur() {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.blur()", null) }
     }
 
     fun insertImage(src: String, alt: String? = null, resourceId: String? = null) {

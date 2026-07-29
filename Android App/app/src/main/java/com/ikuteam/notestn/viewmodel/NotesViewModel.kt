@@ -83,6 +83,13 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val _isFocusingSearch = MutableStateFlow(false)
     val isFocusingSearch: StateFlow<Boolean> = _isFocusingSearch.asStateFlow()
 
+    // Id of a note that was just created via createNote — the editor opens it directly
+    // in edit mode (keyboard up), since a brand-new blank note has nothing to read.
+    // Every other note opens in read mode. Consumed once by the editor (see
+    // consumePendingEdit) so it only applies to the initial open.
+    private val _pendingEditNoteId = MutableStateFlow<String?>(null)
+    val pendingEditNoteId: StateFlow<String?> = _pendingEditNoteId.asStateFlow()
+
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
@@ -412,6 +419,9 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             loadAll()
             _selectedNoteId.value = note.id
             prefs.edit().putString(selectedNoteKey, note.id).apply()
+            // Open the new note directly in edit mode (see pendingEditNoteId). Set
+            // before onCreated so it's in place by the time the editor composes.
+            _pendingEditNoteId.value = note.id
             schedulePushDebounce()
             onCreated(note)
         }
@@ -644,6 +654,12 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeFocusSearch() {
         _isFocusingSearch.value = false
+    }
+
+    /** Cleared by the editor after it has applied the open-in-edit-mode signal (see
+     * pendingEditNoteId), so re-opening the same note later starts in read mode. */
+    fun consumePendingEdit() {
+        _pendingEditNoteId.value = null
     }
 
     companion object {

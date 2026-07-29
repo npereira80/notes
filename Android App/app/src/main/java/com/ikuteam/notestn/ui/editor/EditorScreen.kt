@@ -1,6 +1,7 @@
 package com.ikuteam.notestn.ui.editor
 
 import android.webkit.MimeTypeMap
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DataObject
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FormatIndentDecrease
@@ -53,6 +55,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -146,6 +149,24 @@ fun EditorScreen(
     var showMarkdownSource by remember(note.id) { mutableStateOf(false) }
     var confirmPermanentDelete by remember(note.id) { mutableStateOf(false) }
 
+    // Read vs. edit mode. Read mode (the default) keeps the editor non-editable: a tap
+    // interacts with content (open a link, toggle a task, select text) and never pops
+    // the keyboard. The pencil FAB enters edit mode; the back gesture or dismissing the
+    // keyboard leaves it. A brand-new note opens straight in edit mode (see
+    // pendingEditNoteId); a trashed note is never editable.
+    var editMode by remember(note.id) {
+        mutableStateOf(!readOnly && viewModel.pendingEditNoteId.value == note.id)
+    }
+    // Guards the keyboard-dismiss exit below against the gap between entering edit mode
+    // and the keyboard finishing its show animation.
+    var sawKeyboardThisEdit by remember(note.id) { mutableStateOf(false) }
+
+    // Consume the one-shot "open in edit mode" signal so re-opening this note later
+    // starts in read mode.
+    LaunchedEffect(note.id) {
+        if (viewModel.pendingEditNoteId.value == note.id) viewModel.consumePendingEdit()
+    }
+
     LaunchedEffect(coordinator, note.id) {
         // Title now lives inside the shared ProseMirror doc (see Mac/EditorBundle),
         // so it scrolls with the body instead of sitting in a separate native
@@ -210,6 +231,36 @@ fun EditorScreen(
         }
     }
 
+    // Apply the current mode to the editor. Re-runs when the WebView becomes ready
+    // (including after a render-process recovery) and whenever editMode flips.
+    LaunchedEffect(coordinator.isReady, editMode) {
+        if (!coordinator.isReady) return@LaunchedEffect
+        coordinator.setEditable(editMode)
+        if (editMode) coordinator.focus() else coordinator.blur()
+    }
+
+    // Leave edit mode when the keyboard is dismissed (the back gesture is handled by
+    // the BackHandler below). No separate Done button by design. sawKeyboardThisEdit
+    // avoids treating the pre-show moment as a dismiss.
+    LaunchedEffect(imeVisible) {
+        if (!editMode) {
+            sawKeyboardThisEdit = false
+            return@LaunchedEffect
+        }
+        if (imeVisible) {
+            sawKeyboardThisEdit = true
+        } else if (sawKeyboardThisEdit) {
+            editMode = false
+            sawKeyboardThisEdit = false
+        }
+    }
+
+    // Back gesture in edit mode returns to read mode instead of leaving the note.
+    // Disabled in read mode so back navigates away as usual.
+    BackHandler(enabled = editMode) {
+        editMode = false
+    }
+
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -260,6 +311,19 @@ fun EditorScreen(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = groupedBackground),
                 )
             },
+            floatingActionButton = {
+                // Pencil FAB — only in read mode on an editable (non-trashed) note.
+                // Tapping it enters edit mode and pops the keyboard.
+                if (!readOnly && !editMode) {
+                    FloatingActionButton(
+                        onClick = { editMode = true },
+                        containerColor = NotesYellowVivid,
+                        contentColor = Color.Black,
+                    ) {
+                        Icon(Icons.Filled.Edit, contentDescription = "Edit note")
+                    }
+                }
+            },
         ) { padding ->
             // A Box (not Scaffold's bottomBar slot) so the toolbar floats on top of the
             // WebView instead of reserving its own layout row — that's what lets the
@@ -276,9 +340,9 @@ fun EditorScreen(
                     modifier = Modifier.fillMaxSize().captureForBackdropBlur(blurState),
                 )
 
-                // A trashed note is read-only until restored — no formatting toolbar.
-                // Also hidden once the keyboard is dismissed (see imeVisible above).
-                if (!readOnly && imeVisible) {
+                // Formatting toolbar — only in edit mode with the keyboard up. Read
+                // mode and trashed (read-only) notes never show it.
+                if (!readOnly && editMode && imeVisible) {
                     // bottom = imeHeightDp + 5.dp rises the toolbar above the keyboard
                     // (the app is edge-to-edge — see MainActivity's enableEdgeToEdge —
                     // so nothing resizes for the IME automatically) with a deliberate

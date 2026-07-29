@@ -15459,6 +15459,7 @@
     const domEl = document.getElementById("editor");
     if (!domEl) throw new Error("#editor element not found");
     const isReadOnly = /[?&]readonly=1(&|$)/.test(location.search);
+    let editable = !isReadOnly;
     const isAndroid = /[?&]platform=android(&|$)/.test(location.search);
     if (isAndroid) document.body.classList.add("pm-android");
     const isIOSPhone = /[?&]platform=ios-phone(&|$)/.test(location.search);
@@ -15503,6 +15504,7 @@
               click(_view, event) {
                 const anchor = event.target.closest("a[href]");
                 if (!anchor) return false;
+                if (isAndroid && editable) return false;
                 event.preventDefault();
                 postToNative({ type: "openUrl", url: anchor.href });
                 return true;
@@ -15707,8 +15709,13 @@
     const view = new EditorView(domEl, {
       state,
       dispatchTransaction: (tr) => dispatchWithNotify(view)(tr),
-      editable: () => !isReadOnly
+      editable: () => editable
     });
+    view.__setEditable = (value) => {
+      if (editable === value) return;
+      editable = value;
+      view.setProps({ editable: () => editable });
+    };
     view.dom.addEventListener("focus", () => postToNative({ type: "focusChanged", focused: true }));
     view.dom.addEventListener("blur", () => postToNative({ type: "focusChanged", focused: false }));
     notifySelection(view.state);
@@ -15748,6 +15755,10 @@
         requestAnimationFrame(() => {
           view.dom.focus({ preventScroll: true });
         });
+      },
+      setEditable(value) {
+        var _a;
+        (_a = view.__setEditable) == null ? void 0 : _a.call(view, value);
       },
       focus() {
         view.focus();

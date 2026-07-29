@@ -317,6 +317,15 @@ function createEditor(): EditorView {
   // as a fresh WebView load (never toggled live), so this doesn't need to be reactive.
   const isReadOnly = /[?&]readonly=1(&|$)/.test(location.search);
 
+  // Runtime-toggleable editability. Starts from ?readonly=1 (a trashed note stays
+  // permanently read-only). Android flips this at runtime via the setEditable native
+  // bridge to implement its read-mode / edit-mode split: read mode (editable=false)
+  // means a tap interacts with content (open a link, toggle a task, select text) and
+  // never pops the keyboard; edit mode (editable=true) is normal editing. Mac and iOS
+  // never call setEditable, so for them this stays === !isReadOnly and their behavior
+  // is unchanged.
+  let editable = !isReadOnly;
+
   // Android only — the on-screen keyboard's floating formatting toolbar sits
   // right above the keyboard, close enough to the last line that the text
   // selection handles are hard to grab. Extra bottom padding gives room to
@@ -378,6 +387,11 @@ function createEditor(): EditorView {
             click(_view, event) {
               const anchor = (event.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
               if (!anchor) return false;
+              // On Android in edit mode, a link tap should place the cursor so the
+              // link text can be edited — not launch the browser. In Android read
+              // mode (and on every other platform, where `editable` is never toggled)
+              // this opens the link as before.
+              if (isAndroid && editable) return false;
               event.preventDefault();
               postToNative({ type: 'openUrl', url: anchor.href });
               return true;
@@ -620,8 +634,17 @@ function createEditor(): EditorView {
   const view = new EditorView(domEl, {
     state,
     dispatchTransaction: (tr) => dispatchWithNotify(view)(tr),
-    editable: () => !isReadOnly,
+    editable: () => editable,
   });
+
+  // Exposed for the native setEditable bridge (Android's read/edit toggle). Flips the
+  // `editable` flag the props closure above reads, then setProps() forces ProseMirror
+  // to re-evaluate it and update the DOM's contentEditable (and blur if turning off).
+  (view as EditorViewWithSetEditable).__setEditable = (value: boolean) => {
+    if (editable === value) return;
+    editable = value;
+    view.setProps({ editable: () => editable });
+  };
 
   // Android-only signal: lets the two-pane tablet layout (note list + editor
   // visible side by side, no persistent sidebar — see NotesNavHost.kt) switch
@@ -642,11 +665,15 @@ function createEditor(): EditorView {
 interface NativeEditorBridge {
   setContent: (title: string, body: string) => void;
   execCommand: (command: string, value?: any) => void;
+  setEditable: (value: boolean) => void;
   focus: () => void;
   blur: () => void;
   getHTML: () => string;
   collapseSelection: () => void;
 }
+
+// EditorView with the runtime editability setter attached in createEditor (see there).
+type EditorViewWithSetEditable = EditorView & { __setEditable?: (value: boolean) => void };
 
 declare global {
   interface Window {
@@ -721,6 +748,10 @@ document.addEventListener('DOMContentLoaded', () => {
       requestAnimationFrame(() => {
         (view.dom as HTMLElement).focus({ preventScroll: true });
       });
+    },
+
+    setEditable(value: boolean) {
+      (view as EditorViewWithSetEditable).__setEditable?.(value);
     },
 
     focus() {
