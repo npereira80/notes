@@ -439,18 +439,21 @@ struct NoteRowView: View {
                             .foregroundStyle(note.todoCompleted ? Color.orange : Color.secondary)
                             .font(.system(size: 13))
                     }
-                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
 
                 // Line 2 — timestamp (same color as the title) + preview (gray).
+                // In search results the matched text in the preview is highlighted
+                // (appState.searchText is only non-empty while a search is active, so
+                // this is a no-op for the normal grouped list).
                 Group {
                     if note.preview.isEmpty {
                         Text(dateString)
                     } else {
-                        Text(dateString) + Text("  \(note.preview)").foregroundStyle(.secondary)
+                        Text(dateString) + Text(searchHighlighted("  \(note.preview)", query: appState.searchText)).foregroundStyle(.secondary)
                     }
                 }
                 .font(.system(size: 12))

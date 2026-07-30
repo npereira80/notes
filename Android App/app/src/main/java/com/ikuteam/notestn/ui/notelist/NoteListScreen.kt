@@ -69,6 +69,10 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -89,6 +93,7 @@ import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
 import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveDark
 import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveLight
 import com.ikuteam.notestn.ui.theme.NotesYellowDimmed
+import com.ikuteam.notestn.ui.theme.NotesYellowTextSelect
 import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
@@ -337,6 +342,8 @@ fun NoteListScreen(
                             selected = note.id == selectedNoteId,
                             editorFocused = editorFocused,
                             isTrash = isTrash,
+                            // Highlights the matched text in this result's title/preview.
+                            highlightQuery = searchText,
                             onClick = { onNoteClick(note) },
                             onDelete = { viewModel.deleteNote(note) },
                             onRestore = { viewModel.restoreNote(note) },
@@ -468,6 +475,38 @@ fun NoteListScreen(
                 TextButton(onClick = { confirmEmptyTrash = false }) { Text("Cancel") }
             },
         )
+    }
+}
+
+// MARK: - Search highlighting
+
+/**
+ * Returns [text] as an AnnotatedString with every case-insensitive occurrence of
+ * [query] given a yellow-tint background — used to highlight the matched text in note
+ * list search results. Matching is done on the original text with ignoreCase (no
+ * lowercasing, so match lengths stay aligned to the source). Returns the plain text
+ * when [query] is empty.
+ */
+private fun highlightMatches(
+    text: String,
+    query: String,
+    background: Color = NotesYellowTextSelect,
+): AnnotatedString {
+    if (query.isEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        var start = 0
+        while (start <= text.length) {
+            val idx = text.indexOf(query, start, ignoreCase = true)
+            if (idx < 0) {
+                append(text.substring(start))
+                break
+            }
+            append(text.substring(start, idx))
+            withStyle(SpanStyle(background = background)) {
+                append(text.substring(idx, idx + query.length))
+            }
+            start = idx + query.length
+        }
     }
 }
 
@@ -685,6 +724,8 @@ private fun NoteRow(
     dateString: String,
     selected: Boolean,
     editorFocused: Boolean = false,
+    // Non-empty only in search results — highlights each match in the title/preview.
+    highlightQuery: String = "",
     onClick: () -> Unit,
     onDelete: () -> Unit,
     isTrash: Boolean = false,
@@ -758,7 +799,7 @@ private fun NoteRow(
                     )
                 }
                 Text(
-                    note.title.ifEmpty { "Untitled" },
+                    highlightMatches(note.title.ifEmpty { "Untitled" }, highlightQuery),
                     style = MaterialTheme.typography.bodyLarge.let {
                         it.copy(fontSize = it.fontSize * BIGGER_TEXT_SCALE * 0.8f * 0.8f)
                     },
@@ -766,7 +807,15 @@ private fun NoteRow(
                     maxLines = 1,
                 )
             }
-            val subtitle = if (note.preview.isEmpty()) dateString else "$dateString  ${note.preview}"
+            // Date (plain) + preview (matches highlighted in search results). Only the
+            // preview is highlighted — the date can't contain the query anyway.
+            val subtitle = buildAnnotatedString {
+                append(dateString)
+                if (note.preview.isNotEmpty()) {
+                    append("  ")
+                    append(highlightMatches(note.preview, highlightQuery))
+                }
+            }
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall.let {

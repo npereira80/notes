@@ -202,12 +202,13 @@ struct PadNoteListView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading) {
-                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText))
                         .font(.headline)
                         .foregroundStyle(isSelected ? .white : .primary)
                     // Timestamp matches the title's color; preview keeps its own
                     // (unchanged) secondary color — set per-segment since they're
-                    // concatenated into one Text.
+                    // concatenated into one Text. In search results the matched preview
+                    // text is highlighted (searchText is only non-empty while searching).
                     Group {
                         if note.preview.isEmpty {
                             Text(rowDate(note))
@@ -215,7 +216,7 @@ struct PadNoteListView: View {
                         } else {
                             Text(rowDate(note))
                                 .foregroundColor(isSelected ? .white : .primary)
-                            + Text("  \(note.preview)")
+                            + Text(searchHighlighted("  \(note.preview)", query: appState.searchText))
                                 .foregroundColor(isSelected ? .white : .secondary)
                         }
                     }

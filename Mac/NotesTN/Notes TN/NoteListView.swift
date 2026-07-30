@@ -601,7 +601,7 @@ struct NoteRowView: View {
                             .foregroundStyle(note.todoCompleted ? Color.orange : Color.secondary)
                             .font(.system(size: 13))
                     }
-                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(isActiveHighlighted ? .white : .primary)
                         .lineLimit(1)
@@ -609,12 +609,14 @@ struct NoteRowView: View {
 
                 // Line 2 — timestamp (same color as the title) + preview (gray, unless
                 // isActiveHighlighted — see isPadIdiom above — in which case both go
-                // white for contrast against the vivid-yellow background).
+                // white for contrast against the vivid-yellow background). In search
+                // results the matched preview text is highlighted (searchText is only
+                // non-empty while searching, so this is a no-op otherwise).
                 Group {
                     if note.preview.isEmpty {
                         Text(dateString)
                     } else {
-                        Text(dateString) + Text("  \(note.preview)").foregroundStyle(isActiveHighlighted ? .white : .secondary)
+                        Text(dateString) + Text(searchHighlighted("  \(note.preview)", query: appState.searchText)).foregroundStyle(isActiveHighlighted ? .white : .secondary)
                     }
                 }
                 .font(.system(size: 12))

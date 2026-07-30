@@ -36,3 +36,29 @@ enum AppColors {
             : Color(red: 0xDD / 255, green: 0xDC / 255, blue: 0xDC / 255)   // #DDDCDC
     }
 }
+
+// MARK: - Search highlighting
+
+/// Returns [text] as an AttributedString with every case-insensitive occurrence of
+/// [query] given a yellow-tint background — used to highlight the matched text in
+/// note-list search results (title and preview) on all Apple platforms. Built by
+/// concatenating AttributedString pieces from ranges found on the original string, so
+/// there's no fragile String/AttributedString index conversion. Returns the plain
+/// string when [query] is empty.
+func searchHighlighted(_ text: String, query: String, background: Color = AppColors.textSelectYellow) -> AttributedString {
+    guard !query.isEmpty else { return AttributedString(text) }
+    var result = AttributedString()
+    var searchStart = text.startIndex
+    while searchStart < text.endIndex,
+          let match = text.range(of: query, options: .caseInsensitive, range: searchStart..<text.endIndex) {
+        result += AttributedString(String(text[searchStart..<match.lowerBound]))
+        var matched = AttributedString(String(text[match]))
+        matched.backgroundColor = background
+        result += matched
+        searchStart = match.upperBound
+    }
+    if searchStart < text.endIndex {
+        result += AttributedString(String(text[searchStart...]))
+    }
+    return result
+}
