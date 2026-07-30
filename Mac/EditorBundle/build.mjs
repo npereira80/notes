@@ -304,22 +304,20 @@ function writeEditorHtml(outDir) {
     border-radius: 4px;
     background: transparent;
   }
-  /* Fill/checkmark is driven by the parent li's .checked CLASS, not the input's
-     :checked pseudo-class. Both come from node.attrs.checked via toDOM, but when a
-     task is toggled by tapping its TEXT (not the box), ProseMirror reuses the
-     existing input DOM node and patches only its checked content attribute — which
-     doesn't update the live IDL .checked property that :checked reflects, so the box
-     stayed empty while the strikethrough (also keyed on li.checked) applied. Keying
-     the fill on li.checked too makes both respond together on every tap path.
-     :checked is kept as a second selector so a directly-tapped native toggle still
-     fills even before the class lands. */
-  .ProseMirror ul[data-is-checklist] li.checked input[type="checkbox"],
-  .ProseMirror ul[data-is-checklist] li input[type="checkbox"]:checked {
+  /* Fill/checkmark is driven ONLY by the parent li's .checked CLASS (set from
+     node.attrs.checked in toDOM), never the input's :checked pseudo-class. The node
+     attribute is the single source of truth and toggles cleanly both ways. :checked
+     must NOT be used: ProseMirror reuses the existing input element across re-renders
+     and only patches its checked content attribute — and removing that attribute
+     does not clear the live IDL .checked property once set, so :checked would stay
+     true and the box would stay filled forever, making a task impossible to un-check.
+     The strikethrough (li.checked > div, below) is keyed the same way, so fill and
+     strike always track together. */
+  .ProseMirror ul[data-is-checklist] li.checked input[type="checkbox"] {
     background: var(--color-checkbox-checked-bg);
     border-color: var(--color-checkbox-checked-bg);
   }
-  .ProseMirror ul[data-is-checklist] li.checked input[type="checkbox"]::before,
-  .ProseMirror ul[data-is-checklist] li input[type="checkbox"]:checked::before {
+  .ProseMirror ul[data-is-checklist] li.checked input[type="checkbox"]::before {
     content: "";
     display: block;
     width: 100%;
