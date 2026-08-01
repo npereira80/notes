@@ -93,6 +93,7 @@ import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
 import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveDark
 import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveLight
 import com.ikuteam.notestn.ui.theme.NotesYellowDimmed
+import com.ikuteam.notestn.ui.theme.NotesYellowTextSelect
 import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
@@ -489,7 +490,7 @@ fun NoteListScreen(
 private fun highlightMatches(
     text: String,
     query: String,
-    background: Color = NotesYellowVivid,
+    background: Color,
 ): AnnotatedString {
     if (query.isEmpty()) return AnnotatedString(text)
     return buildAnnotatedString {
@@ -744,6 +745,10 @@ private fun NoteRow(
         }
     }
     val darkTheme = isSystemInDarkTheme()
+    // Search highlight adapts to the theme: the light tint in light mode, the strong
+    // vivid yellow in dark mode (the light tint has too little contrast on dark rows /
+    // light text). Matches the in-note find's current-match color in dark mode.
+    val searchHighlightBg = if (darkTheme) NotesYellowVivid else NotesYellowTextSelect
 
     Box {
         Row(
@@ -792,7 +797,7 @@ private fun NoteRow(
                     )
                 }
                 Text(
-                    highlightMatches(note.title.ifEmpty { "Untitled" }, highlightQuery),
+                    highlightMatches(note.title.ifEmpty { "Untitled" }, highlightQuery, searchHighlightBg),
                     style = MaterialTheme.typography.bodyLarge.let {
                         it.copy(fontSize = it.fontSize * BIGGER_TEXT_SCALE * 0.8f * 0.8f)
                     },
@@ -806,7 +811,7 @@ private fun NoteRow(
                 append(dateString)
                 if (note.preview.isNotEmpty()) {
                     append("  ")
-                    append(highlightMatches(note.preview, highlightQuery))
+                    append(highlightMatches(note.preview, highlightQuery, searchHighlightBg))
                 }
             }
             Text(

@@ -39,14 +39,25 @@ enum AppColors {
 
 // MARK: - Search highlighting
 
+/// Search-result highlight background, adapted to the color scheme: the light tint in
+/// light mode, and the strong/vivid yellow in dark mode (the light tint has too little
+/// contrast against dark rows / light text). Matches the in-note find's current-match
+/// color in dark mode.
+extension AppColors {
+    static func searchHighlight(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? vividYellow : textSelectYellow
+    }
+}
+
 /// Returns [text] as an AttributedString with every case-insensitive occurrence of
-/// [query] given a strong-yellow background — used to highlight the matched text in
-/// note-list search results (title and preview) on all Apple platforms, matching the
-/// in-note find's current-match highlight. Built by concatenating AttributedString
-/// pieces from ranges found on the original string, so there's no fragile
-/// String/AttributedString index conversion. Returns the plain string when [query]
-/// is empty.
-func searchHighlighted(_ text: String, query: String, background: Color = AppColors.vividYellow) -> AttributedString {
+/// [query] given the scheme-appropriate search highlight background (see
+/// AppColors.searchHighlight) — used to highlight the matched text in note-list search
+/// results (title and preview) on all Apple platforms. Built by concatenating
+/// AttributedString pieces from ranges found on the original string, so there's no
+/// fragile String/AttributedString index conversion. Returns the plain string when
+/// [query] is empty.
+func searchHighlighted(_ text: String, query: String, scheme: ColorScheme) -> AttributedString {
+    let background = AppColors.searchHighlight(scheme)
     guard !query.isEmpty else { return AttributedString(text) }
     var result = AttributedString()
     var searchStart = text.startIndex

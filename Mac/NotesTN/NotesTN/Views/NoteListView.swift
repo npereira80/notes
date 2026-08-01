@@ -439,7 +439,7 @@ struct NoteRowView: View {
                             .foregroundStyle(note.todoCompleted ? Color.orange : Color.secondary)
                             .font(.system(size: 13))
                     }
-                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText))
+                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText, scheme: colorScheme))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -453,7 +453,7 @@ struct NoteRowView: View {
                     if note.preview.isEmpty {
                         Text(dateString)
                     } else {
-                        Text(dateString) + Text(searchHighlighted("  \(note.preview)", query: appState.searchText)).foregroundStyle(.secondary)
+                        Text(dateString) + Text(searchHighlighted("  \(note.preview)", query: appState.searchText, scheme: colorScheme)).foregroundStyle(.secondary)
                     }
                 }
                 .font(.system(size: 12))

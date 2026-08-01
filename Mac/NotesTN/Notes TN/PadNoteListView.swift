@@ -98,6 +98,7 @@ private func rowDate(_ note: Note) -> String {
 
 struct PadNoteListView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
     // Passed down from PadContentView (read above NavigationSplitView there) rather
     // than read locally via @Environment here — this column's own width is narrow
     // even when all 3 columns are visible on a full-size iPad, so a local read
@@ -202,7 +203,7 @@ struct PadNoteListView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading) {
-                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText))
+                    Text(searchHighlighted(note.title.isEmpty ? "Untitled" : note.title, query: appState.searchText, scheme: colorScheme))
                         .font(.headline)
                         .foregroundStyle(isSelected ? .white : .primary)
                     // Timestamp matches the title's color; preview keeps its own
@@ -216,7 +217,7 @@ struct PadNoteListView: View {
                         } else {
                             Text(rowDate(note))
                                 .foregroundColor(isSelected ? .white : .primary)
-                            + Text(searchHighlighted("  \(note.preview)", query: appState.searchText))
+                            + Text(searchHighlighted("  \(note.preview)", query: appState.searchText, scheme: colorScheme))
                                 .foregroundColor(isSelected ? .white : .secondary)
                         }
                     }
