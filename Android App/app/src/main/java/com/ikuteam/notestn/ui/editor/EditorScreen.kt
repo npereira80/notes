@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -148,6 +149,8 @@ fun EditorScreen(
     var showLinkDialog by remember(note.id) { mutableStateOf(false) }
     var showMarkdownSource by remember(note.id) { mutableStateOf(false) }
     var confirmPermanentDelete by remember(note.id) { mutableStateOf(false) }
+    // Set when a detected address is tapped — drives the Google Maps / Waze chooser.
+    var mapsAddress by remember(note.id) { mutableStateOf<String?>(null) }
 
     // Read vs. edit mode. Read mode (the default) keeps the editor non-editable: a tap
     // interacts with content (open a link, toggle a task, select text) and never pops
@@ -199,6 +202,7 @@ fun EditorScreen(
                 context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
             }
         }
+        coordinator.onOpenMaps = { address -> mapsAddress = address }
         coordinator.onFocusChanged = { focused ->
             viewModel.isEditorFocused = focused
         }
@@ -404,6 +408,24 @@ fun EditorScreen(
         )
     }
 
+    mapsAddress?.let { address ->
+        MapsChooserDialog(
+            address = address,
+            onPick = { app ->
+                val query = android.net.Uri.encode(address)
+                val url = when (app) {
+                    MapsApp.GOOGLE -> "https://www.google.com/maps/search/?api=1&query=$query"
+                    MapsApp.WAZE -> "https://waze.com/ul?q=$query"
+                }
+                runCatching {
+                    context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                }
+                mapsAddress = null
+            },
+            onDismiss = { mapsAddress = null },
+        )
+    }
+
     if (confirmPermanentDelete) {
         AlertDialog(
             onDismissRequest = { confirmPermanentDelete = false },
@@ -551,6 +573,32 @@ private fun EditorToolbar(
         // Debugging aid — view the Markdown source the current HTML converts to.
         ToolbarIconButton(Icons.Filled.DataObject, "View Markdown Source", onShowMarkdownSource)
     }
+}
+
+private enum class MapsApp { GOOGLE, WAZE }
+
+@Composable
+private fun MapsChooserDialog(address: String, onPick: (MapsApp) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Open address in") },
+        text = {
+            Column {
+                Text(address, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(12.dp))
+                TextButton(
+                    onClick = { onPick(MapsApp.GOOGLE) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Google Maps") }
+                TextButton(
+                    onClick = { onPick(MapsApp.WAZE) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Waze") }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

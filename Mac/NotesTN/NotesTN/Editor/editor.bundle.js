@@ -15309,6 +15309,84 @@
       return false;
     }
   }
+  var EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  var URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>()]+/gi;
+  var PHONE_RE = /(?:\+|00)?\d[\d\s().-]{5,}\d/g;
+  var STREET = "(?:Rua|R\\.|Avenida|Av\\.?|Travessa|Tv\\.?|Largo|Pra[\xE7c]a|Estrada|Alameda|Beco|Street|St\\.?|Avenue|Ave\\.?|Road|Rd\\.?|Boulevard|Blvd\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Way|Court|Ct\\.?|Place|Pl\\.?)";
+  var ADDRESS_RE = new RegExp(
+    // "123 Some Name Street" (number, up to 4 words, then a street type) ...
+    `(?:\\b\\d{1,5}\\s+(?:[A-Za-z\xC0-\xFF.'\xBA\xAA]+\\s+){0,4}${STREET}\\b)|(?:\\b${STREET}\\s+[A-Za-z\xC0-\xFF0-9.'\xBA\xAA ]*?\\d{1,5}(?:\\s*[-\u2013]\\s*\\d{1,4})?)`,
+    "gi"
+  );
+  function countDigits(s) {
+    return (s.match(/\d/g) || []).length;
+  }
+  function trimTrailingPunct(s) {
+    return s.replace(/[.,;:!?)\]}'"]+$/, "");
+  }
+  function detectLinks(text) {
+    const all = [];
+    const scan = (re, build) => {
+      re.lastIndex = 0;
+      let m;
+      while (m = re.exec(text)) {
+        const built = build(m[0]);
+        if (!built) continue;
+        const start = m.index;
+        all.push({ start, end: start + built.value.length, type: typeForRe(re), href: built.href });
+      }
+    };
+    const typeForRe = (re) => re === EMAIL_RE ? "email" : re === URL_RE ? "url" : re === PHONE_RE ? "phone" : "address";
+    scan(EMAIL_RE, (raw) => ({ value: raw, href: `mailto:${raw}` }));
+    scan(URL_RE, (raw) => {
+      const value = trimTrailingPunct(raw);
+      const href = /^www\./i.test(value) ? `https://${value}` : value;
+      return { value, href };
+    });
+    scan(PHONE_RE, (raw) => {
+      const digits = countDigits(raw);
+      if (digits < 9 || digits > 15) return null;
+      const plus = raw.trimStart().startsWith("+") ? "+" : "";
+      const tel = plus + (raw.match(/\d/g) || []).join("");
+      return { value: raw, href: `tel:${tel}` };
+    });
+    scan(ADDRESS_RE, (raw) => {
+      const value = raw.trim();
+      if (value.length < 6) return null;
+      return { value, href: value };
+    });
+    const priority = { email: 0, url: 1, phone: 2, address: 3 };
+    all.sort(
+      (a, b) => a.start - b.start || priority[a.type] - priority[b.type] || b.end - b.start - (a.end - a.start)
+    );
+    const result = [];
+    let lastEnd = -1;
+    for (const link of all) {
+      if (link.start >= lastEnd) {
+        result.push(link);
+        lastEnd = link.end;
+      }
+    }
+    return result;
+  }
+  var autoLinkKey = new PluginKey("autoLink");
+  function buildAutoLinkDecos(doc3) {
+    const decos = [];
+    doc3.descendants((node, pos) => {
+      if (!node.isText || !node.text) return;
+      if (node.marks.some((m) => m.type === schema_default.marks.link)) return;
+      for (const link of detectLinks(node.text)) {
+        decos.push(
+          Decoration.inline(pos + link.start, pos + link.end, {
+            class: `pm-autolink pm-autolink-${link.type}`,
+            "data-al-type": link.type,
+            "data-al-href": link.href
+          })
+        );
+      }
+    });
+    return DecorationSet.create(doc3, decos);
+  }
   function stripPastedTables(html) {
     const dom = new DOMParser().parseFromString(html, "text/html");
     let tables = Array.from(dom.body.querySelectorAll("table"));
@@ -15507,6 +15585,34 @@
                 if (isAndroid && editable) return false;
                 event.preventDefault();
                 postToNative({ type: "openUrl", url: anchor.href });
+                return true;
+              }
+            }
+          }
+        }),
+        // Data detectors: underline detected URLs / emails / phones / addresses in
+        // plain text (see detectLinks) as yellow "active links", via decorations that
+        // don't touch the stored document. A tap opens the right app; on Android in
+        // edit mode a tap places the cursor instead (same rule as explicit links).
+        new Plugin({
+          key: autoLinkKey,
+          state: {
+            init: (_config, editorState) => buildAutoLinkDecos(editorState.doc),
+            apply: (tr, old, _oldState, newState) => tr.docChanged ? buildAutoLinkDecos(newState.doc) : old
+          },
+          props: {
+            decorations(editorState) {
+              return autoLinkKey.getState(editorState);
+            },
+            handleDOMEvents: {
+              click(_view, event) {
+                const el = event.target.closest("[data-al-href]");
+                if (!el) return false;
+                if (isAndroid && editable) return false;
+                event.preventDefault();
+                const type = el.getAttribute("data-al-type");
+                const href = el.getAttribute("data-al-href") || "";
+                postToNative(type === "address" ? { type: "openMaps", url: href } : { type: "openUrl", url: href });
                 return true;
               }
             }

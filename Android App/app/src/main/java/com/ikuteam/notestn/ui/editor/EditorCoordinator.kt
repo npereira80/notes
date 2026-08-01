@@ -48,6 +48,9 @@ class EditorCoordinator {
     var onContentChanged: ((title: String, body: String) -> Unit)? = null
     var onImageRequested: ((dataUri: String) -> Unit)? = null
     var onOpenUrl: ((String) -> Unit)? = null
+    // A detected address (see the data detectors in Mac/EditorBundle/src/index.ts) —
+    // the screen shows a Google Maps / Waze chooser and opens the pick.
+    var onOpenMaps: ((address: String) -> Unit)? = null
     // True while the ProseMirror editor's contentEditable region has keyboard
     // focus (vs. the note list) — drives the selected note row's Gray (editor
     // focused) vs. Dimmed yellow (list focused) background in the tablet
@@ -73,6 +76,7 @@ class EditorCoordinator {
             "selectionChanged" -> message.selectionState?.let { selectionState = it }
             "imageRequested" -> message.html?.let { onImageRequested?.invoke(it) }
             "openUrl" -> message.url?.let { onOpenUrl?.invoke(it) }
+            "openMaps" -> message.url?.let { onOpenMaps?.invoke(it) }
             "focusChanged" -> message.focused?.let { onFocusChanged?.invoke(it) }
             "log" -> Log.d("EditorJS", message.message ?: "")
         }

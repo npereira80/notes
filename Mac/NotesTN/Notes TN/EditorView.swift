@@ -107,6 +107,13 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                 UIApplication.shared.open(url)
             }
 
+        case "openMaps":
+            // A detected address (see the data detectors in EditorBundle) — let the
+            // user pick which maps app to open it in.
+            if let address = body["url"] as? String {
+                presentMapsChooser(address: address)
+            }
+
         case "log":
             if let msg = body["message"] as? String {
                 print("[Editor JS] \(msg)")
@@ -115,6 +122,47 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
         default:
             break
         }
+    }
+
+    // Builds the two maps apps' universal-link search URLs. Universal links open the
+    // app if installed, otherwise the website — no per-app scheme / installed check.
+    static func mapsURL(forApp app: String, address: String) -> URL? {
+        let query = address.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? address
+        switch app {
+        case "google": return URL(string: "https://www.google.com/maps/search/?api=1&query=\(query)")
+        case "waze":   return URL(string: "https://waze.com/ul?q=\(query)")
+        default:       return nil
+        }
+    }
+
+    /// UIAlertController chooser (Google Maps / Waze) for a detected address. Presented
+    /// from the active window's root view controller so it works from the coordinator
+    /// without wiring every SwiftUI editor view; .alert style (not .actionSheet) is
+    /// used so it needs no popover source on iPad.
+    private func presentMapsChooser(address: String) {
+        guard let root = Self.activeRootViewController() else { return }
+        // Don't stack a second chooser if one is already up (e.g. two quick taps) —
+        // present would otherwise silently no-op and swallow the second tap.
+        guard root.presentedViewController == nil else { return }
+        let alert = UIAlertController(title: "Open address in", message: address, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Google Maps", style: .default) { _ in
+            if let url = Self.mapsURL(forApp: "google", address: address) { UIApplication.shared.open(url) }
+        })
+        alert.addAction(UIAlertAction(title: "Waze", style: .default) { _ in
+            if let url = Self.mapsURL(forApp: "waze", address: address) { UIApplication.shared.open(url) }
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        root.present(alert, animated: true)
+    }
+
+    private static func activeRootViewController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let keyWindow = scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first
+        var top = keyWindow?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
     }
 
     // MARK: Callbacks set by NoteEditorView

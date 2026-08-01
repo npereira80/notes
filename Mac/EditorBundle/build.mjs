@@ -356,6 +356,18 @@ function writeEditorHtml(outDir) {
     text-underline-offset: 2px;
   }
 
+  /* Auto-detected links (URLs / emails / phones / addresses) — rendered via
+     decorations, styled to match explicit links: brand-yellow text and underline.
+     The text keeps its normal color inheritance elsewhere; only these spans are
+     tinted. See the data detectors + auto-link plugin in index.ts. */
+  .ProseMirror .pm-autolink {
+    color: var(--color-link);
+    text-decoration: underline;
+    text-decoration-color: var(--color-link);
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
   /* Highlight */
   .ProseMirror mark {
     background: var(--color-highlight-bg);

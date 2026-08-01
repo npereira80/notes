@@ -8,7 +8,7 @@
  *   Native → JS:  window.NativeEditor.setContent(html) / execCommand(cmd, value) etc.
  */
 
-import { EditorState, Plugin, Selection, Transaction } from 'prosemirror-state';
+import { EditorState, Plugin, PluginKey, Selection, Transaction } from 'prosemirror-state';
 import { EditorView, DirectEditorProps, Decoration, DecorationSet } from 'prosemirror-view';
 import { DOMParser as PMDOMParser, DOMSerializer, Fragment } from 'prosemirror-model';
 import { history } from 'prosemirror-history';
@@ -43,7 +43,10 @@ interface SelectionState {
 }
 
 interface NativeMessage {
-  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'focusChanged';
+  // openMaps carries a plain address string in `url`; native shows a Google Maps /
+  // Waze chooser and opens the chosen app. Everything else routes through openUrl
+  // with a fully-formed scheme URL (https:, mailto:, tel:).
+  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged';
   title?: string;
   html?: string;
   selectionState?: SelectionState;
@@ -124,6 +127,128 @@ function isUrl(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+// ── Data detectors (auto-link URLs / emails / phones / addresses) ──────────────
+//
+// Detects link-like spans in plain text and renders them as yellow-underlined
+// "active links" via ProseMirror decorations (see the auto-link plugin in
+// createEditor). Detection is presentational only — it never alters the stored
+// document/Markdown. On tap, native opens the right app (browser / mail / phone /
+// maps). Kept intentionally simple; phone and address detection are best-effort
+// heuristics (bare 9-digit local numbers are matched per product decision, and
+// addresses key off street-type keywords near a number).
+
+type DetectedLinkType = 'url' | 'email' | 'phone' | 'address';
+interface DetectedLink {
+  start: number;   // offset within the text
+  end: number;
+  type: DetectedLinkType;
+  href: string;    // scheme URL for url/email/phone; raw address string for address
+}
+
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>()]+/gi;
+// Candidate phone runs; digit count is validated in detectLinks (9–15) so bare
+// 9-digit local numbers match while short numeric tokens (years, postal codes,
+// quantities) don't.
+const PHONE_RE = /(?:\+|00)?\d[\d\s().-]{5,}\d/g;
+// Street-type keywords (Portuguese + English), used by the address heuristic.
+const STREET = "(?:Rua|R\\.|Avenida|Av\\.?|Travessa|Tv\\.?|Largo|Pra[çc]a|Estrada|Alameda|Beco|Street|St\\.?|Avenue|Ave\\.?|Road|Rd\\.?|Boulevard|Blvd\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Way|Court|Ct\\.?|Place|Pl\\.?)";
+const ADDRESS_RE = new RegExp(
+  // "123 Some Name Street" (number, up to 4 words, then a street type) ...
+  `(?:\\b\\d{1,5}\\s+(?:[A-Za-zÀ-ÿ.'ºª]+\\s+){0,4}${STREET}\\b)` +
+  // ... or "Rua da Prata 12" (street type, words, then a number)
+  `|(?:\\b${STREET}\\s+[A-Za-zÀ-ÿ0-9.'ºª ]*?\\d{1,5}(?:\\s*[-–]\\s*\\d{1,4})?)`,
+  'gi'
+);
+
+function countDigits(s: string): number {
+  return (s.match(/\d/g) || []).length;
+}
+
+function trimTrailingPunct(s: string): string {
+  return s.replace(/[.,;:!?)\]}'"]+$/, '');
+}
+
+/** Non-overlapping detected links in [text], resolved by priority
+ * (email > url > phone > address) then by earliest start / longest match. */
+function detectLinks(text: string): DetectedLink[] {
+  const all: DetectedLink[] = [];
+
+  const scan = (
+    re: RegExp,
+    build: (raw: string) => { value: string; href: string } | null,
+  ) => {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const built = build(m[0]);
+      if (!built) continue;
+      const start = m.index;
+      all.push({ start, end: start + built.value.length, type: typeForRe(re), href: built.href });
+    }
+  };
+  const typeForRe = (re: RegExp): DetectedLinkType =>
+    re === EMAIL_RE ? 'email' : re === URL_RE ? 'url' : re === PHONE_RE ? 'phone' : 'address';
+
+  scan(EMAIL_RE, (raw) => ({ value: raw, href: `mailto:${raw}` }));
+  scan(URL_RE, (raw) => {
+    const value = trimTrailingPunct(raw);
+    const href = /^www\./i.test(value) ? `https://${value}` : value;
+    return { value, href };
+  });
+  scan(PHONE_RE, (raw) => {
+    const digits = countDigits(raw);
+    if (digits < 9 || digits > 15) return null;
+    // Keep a leading + if present; strip spaces/formatting for the tel: URL.
+    const plus = raw.trimStart().startsWith('+') ? '+' : '';
+    const tel = plus + (raw.match(/\d/g) || []).join('');
+    return { value: raw, href: `tel:${tel}` };
+  });
+  scan(ADDRESS_RE, (raw) => {
+    const value = raw.trim();
+    if (value.length < 6) return null;
+    return { value, href: value }; // raw address; native builds the maps URL
+  });
+
+  const priority: Record<DetectedLinkType, number> = { email: 0, url: 1, phone: 2, address: 3 };
+  all.sort(
+    (a, b) => a.start - b.start || priority[a.type] - priority[b.type] || (b.end - b.start) - (a.end - a.start),
+  );
+  const result: DetectedLink[] = [];
+  let lastEnd = -1;
+  for (const link of all) {
+    if (link.start >= lastEnd) {
+      result.push(link);
+      lastEnd = link.end;
+    }
+  }
+  return result;
+}
+
+// Plugin state holds the current auto-link DecorationSet; recomputed only when the
+// document changes (not on every selection move).
+const autoLinkKey = new PluginKey<DecorationSet>('autoLink');
+
+function buildAutoLinkDecos(doc: any): DecorationSet {
+  const decos: Decoration[] = [];
+  doc.descendants((node: any, pos: number) => {
+    if (!node.isText || !node.text) return;
+    // Skip text that's already an explicit link (<a> via the link mark) — those are
+    // handled by the existing link click handler and shouldn't be double-detected.
+    if (node.marks.some((m: any) => m.type === schema.marks.link)) return;
+    for (const link of detectLinks(node.text)) {
+      decos.push(
+        Decoration.inline(pos + link.start, pos + link.end, {
+          class: `pm-autolink pm-autolink-${link.type}`,
+          'data-al-type': link.type,
+          'data-al-href': link.href,
+        }),
+      );
+    }
+  });
+  return DecorationSet.create(doc, decos);
 }
 
 // Pasted rich HTML from webpages sometimes carries structural layout markup —
@@ -394,6 +519,38 @@ function createEditor(): EditorView {
               if (isAndroid && editable) return false;
               event.preventDefault();
               postToNative({ type: 'openUrl', url: anchor.href });
+              return true;
+            },
+          },
+        },
+      }),
+
+      // Data detectors: underline detected URLs / emails / phones / addresses in
+      // plain text (see detectLinks) as yellow "active links", via decorations that
+      // don't touch the stored document. A tap opens the right app; on Android in
+      // edit mode a tap places the cursor instead (same rule as explicit links).
+      new Plugin({
+        key: autoLinkKey,
+        state: {
+          init: (_config, editorState) => buildAutoLinkDecos(editorState.doc),
+          apply: (tr, old, _oldState, newState) =>
+            tr.docChanged ? buildAutoLinkDecos(newState.doc) : old,
+        },
+        props: {
+          decorations(editorState) {
+            return autoLinkKey.getState(editorState);
+          },
+          handleDOMEvents: {
+            click(_view, event) {
+              const el = (event.target as HTMLElement).closest('[data-al-href]') as HTMLElement | null;
+              if (!el) return false;
+              if (isAndroid && editable) return false;
+              event.preventDefault();
+              const type = el.getAttribute('data-al-type');
+              const href = el.getAttribute('data-al-href') || '';
+              // Addresses go through openMaps (native shows a Google Maps / Waze
+              // chooser); url/email/phone are already fully-formed scheme URLs.
+              postToNative(type === 'address' ? { type: 'openMaps', url: href } : { type: 'openUrl', url: href });
               return true;
             },
           },

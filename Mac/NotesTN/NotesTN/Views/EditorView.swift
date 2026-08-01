@@ -99,6 +99,13 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                 NSWorkspace.shared.open(url)
             }
 
+        case "openMaps":
+            // A detected address (see the data detectors in EditorBundle) — let the
+            // user pick which maps app to open it in.
+            if let address = body["url"] as? String {
+                presentMapsChooser(address: address)
+            }
+
         case "log":
             if let msg = body["message"] as? String {
                 print("[Editor JS] \(msg)")
@@ -106,6 +113,37 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
         default:
             break
+        }
+    }
+
+    // Shared by Mac + iOS builds of the two maps apps' universal-link search URLs.
+    // Universal links open the app if installed, otherwise the website — no per-app
+    // URL scheme / installed-check needed.
+    static func mapsURL(forApp app: String, address: String) -> URL? {
+        let query = address.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? address
+        switch app {
+        case "google": return URL(string: "https://www.google.com/maps/search/?api=1&query=\(query)")
+        case "waze":   return URL(string: "https://waze.com/ul?q=\(query)")
+        default:       return nil
+        }
+    }
+
+    /// NSAlert chooser (Google Maps / Waze) for a detected address, then opens the pick.
+    private func presentMapsChooser(address: String) {
+        let alert = NSAlert()
+        alert.messageText = "Open address in"
+        alert.informativeText = address
+        alert.addButton(withTitle: "Google Maps")
+        alert.addButton(withTitle: "Waze")
+        alert.addButton(withTitle: "Cancel")
+        let app: String?
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:  app = "google"
+        case .alertSecondButtonReturn: app = "waze"
+        default:                       app = nil
+        }
+        if let app, let url = Self.mapsURL(forApp: app, address: address) {
+            NSWorkspace.shared.open(url)
         }
     }
 
