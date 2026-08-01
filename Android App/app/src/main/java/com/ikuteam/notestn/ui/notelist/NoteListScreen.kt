@@ -599,7 +599,6 @@ private fun FloatingSearchAndAddBar(
             requestFocus = requestFocus,
             onFocusConsumed = onFocusConsumed,
             background = fieldBackground,
-            blurState = blurState,
             modifier = Modifier.weight(1f),
         )
         if (showAddButton) {
@@ -634,7 +633,6 @@ private fun FloatingSearchField(
     requestFocus: Boolean,
     onFocusConsumed: () -> Unit,
     background: Color,
-    blurState: BackdropBlurState,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -651,19 +649,15 @@ private fun FloatingSearchField(
     // floating control group. `modifier` already carries `weight(1f)` from the
     // caller's Row, so only height needs fixing here.
     //
-    // Custom Box instead of Surface — Surface draws its own solid color fill with no
-    // hook to slot a blurred backdrop in underneath it, so the glass look needs full
-    // control over draw order (blur, then tint, then content). 0.80 tint alpha ==
-    // current glass opacity setting (still technically translucent/blurred, but
-    // substantially opaque rather than very see-through).
+    // Solid (opaque) fill — the search bar no longer uses the translucent/blurred
+    // glass look, per request. The FAB next to it keeps its glass treatment.
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
             .height(48.dp)
             .shadow(3.dp, shape)
             .clip(shape)
-            .backdropBlurBackground(blurState)
-            .background(background.copy(alpha = 0.80f))
+            .background(background)
             .border(0.5.dp, NotesYellowVivid, shape),
     ) {
         Row(
