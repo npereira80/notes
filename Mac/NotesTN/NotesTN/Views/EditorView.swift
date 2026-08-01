@@ -106,6 +106,9 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                 presentMapsChooser(address: address)
             }
 
+        case "findResult":
+            onFindResult?(body["count"] as? Int ?? 0, body["index"] as? Int ?? 0)
+
         case "log":
             if let msg = body["message"] as? String {
                 print("[Editor JS] \(msg)")
@@ -150,6 +153,21 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     // MARK: Callbacks set by NoteEditorView
     var onContentChanged: ((String, String) -> Void)?
     var onImageRequested: ((String) -> Void)?
+    // In-note find progress: (total matches, 1-based current index; 0 = none).
+    var onFindResult: ((Int, Int) -> Void)?
+
+    // MARK: In-note find
+
+    func find(_ query: String) {
+        guard let wv = webView,
+              let data = try? JSONEncoder().encode(query),
+              let json = String(data: data, encoding: .utf8) else { return }
+        wv.evaluateJavaScript("window.NativeEditor?.find(\(json))")
+    }
+
+    func findNext() { webView?.evaluateJavaScript("window.NativeEditor?.findNext()") }
+    func findPrevious() { webView?.evaluateJavaScript("window.NativeEditor?.findPrevious()") }
+    func endFind() { webView?.evaluateJavaScript("window.NativeEditor?.endFind()") }
 
     // MARK: Commands → JS
 
@@ -366,6 +384,12 @@ struct NoteEditorView: View {
     @StateObject private var editorCoordinator = EditorCoordinator()
     @State private var isShowingImagePicker = false
     @State private var showPermanentDeleteConfirm = false
+    // In-note find (Cmd+Shift+F) — highlights matches in the editor, distinct from the
+    // global note-list search.
+    @State private var showFind = false
+    @State private var findQuery = ""
+    @State private var findCount = 0
+    @State private var findCurrent = 0
     // Captured below (see the GeometryReader background) from the safe area the
     // native window toolbar reserves — pushed into the WebView's own content via
     // editorCoordinator.setTopInset so it can flow its full height underneath the
@@ -385,6 +409,20 @@ struct NoteEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+
+            // In-note find bar (Cmd+Shift+F) — sits under the window toolbar like
+            // Apple Notes' find bar, above the editor content.
+            if showFind {
+                EditorFindBar(
+                    query: $findQuery,
+                    current: findCurrent,
+                    count: findCount,
+                    onNext: { editorCoordinator.findNext() },
+                    onPrevious: { editorCoordinator.findPrevious() },
+                    onClose: closeFind
+                )
+                Divider()
+            }
 
             // MARK: Toolbar
             // A trashed note is read-only until restored — Restore/Delete Permanently
@@ -466,6 +504,14 @@ struct NoteEditorView: View {
         .onAppear {
             setupCallbacks()
         }
+        // Cmd+Shift+F toggles the in-note find bar (a hidden, zero-opacity button just
+        // to host the keyboard shortcut).
+        .background(
+            Button("") { toggleFind() }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .opacity(0)
+        )
+        .onChange(of: findQuery) { _, q in editorCoordinator.find(q) }
         .onChange(of: editorCoordinator.isReady) { _, ready in
             // Reads the note fresh from AppState (falling back to the values captured
             // at init) — isReady also re-fires after a content-process-terminate
@@ -535,6 +581,24 @@ struct NoteEditorView: View {
                 resourceId: resource.id
             )
         }
+        editorCoordinator.onFindResult = { count, index in
+            findCount = count
+            findCurrent = index
+        }
+    }
+
+    // MARK: Find
+
+    private func toggleFind() {
+        if showFind { closeFind() } else { showFind = true }
+    }
+
+    private func closeFind() {
+        showFind = false
+        findQuery = ""
+        findCount = 0
+        findCurrent = 0
+        editorCoordinator.endFind()
     }
 
     // MARK: Image handling
@@ -611,6 +675,48 @@ struct NoteEditorView: View {
         // synced since the server doesn't know about it.
         DatabaseManager.shared.saveResource(resource, dirty: true, synced: false)
         return resource
+    }
+}
+
+// MARK: - Find bar
+
+/// In-note find bar (Cmd+Shift+F) — search field, match counter, prev/next, Done.
+struct EditorFindBar: View {
+    @Binding var query: String
+    let current: Int
+    let count: Int
+    var onNext: () -> Void
+    var onPrevious: () -> Void
+    var onClose: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in note", text: $query)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .focused($focused)
+                .onSubmit(onNext)
+            if !query.isEmpty {
+                Text(count > 0 ? "\(current)/\(count)" : "0/0")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Button(action: onPrevious) { Image(systemName: "chevron.up") }
+                .buttonStyle(.borderless)
+                .disabled(count == 0)
+            Button(action: onNext) { Image(systemName: "chevron.down") }
+                .buttonStyle(.borderless)
+                .disabled(count == 0)
+            Button("Done", action: onClose)
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .onAppear { focused = true }
     }
 }
 

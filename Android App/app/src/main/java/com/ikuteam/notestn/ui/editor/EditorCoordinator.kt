@@ -51,6 +51,8 @@ class EditorCoordinator {
     // A detected address (see the data detectors in Mac/EditorBundle/src/index.ts) —
     // the screen shows a Google Maps / Waze chooser and opens the pick.
     var onOpenMaps: ((address: String) -> Unit)? = null
+    // In-note find progress: (total matches, 1-based current index; 0 = none).
+    var onFindResult: ((count: Int, index: Int) -> Unit)? = null
     // True while the ProseMirror editor's contentEditable region has keyboard
     // focus (vs. the note list) — drives the selected note row's Gray (editor
     // focused) vs. Dimmed yellow (list focused) background in the tablet
@@ -77,6 +79,7 @@ class EditorCoordinator {
             "imageRequested" -> message.html?.let { onImageRequested?.invoke(it) }
             "openUrl" -> message.url?.let { onOpenUrl?.invoke(it) }
             "openMaps" -> message.url?.let { onOpenMaps?.invoke(it) }
+            "findResult" -> onFindResult?.invoke(message.count ?: 0, message.index ?: 0)
             "focusChanged" -> message.focused?.let { onFocusChanged?.invoke(it) }
             "log" -> Log.d("EditorJS", message.message ?: "")
         }
@@ -134,6 +137,28 @@ class EditorCoordinator {
     fun blur() {
         val wv = webView ?: return
         wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.blur()", null) }
+    }
+
+    // ── In-note find ──
+    fun find(query: String) {
+        val wv = webView ?: return
+        val encoded = jsonCoder.encodeToString(query)
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.find($encoded)", null) }
+    }
+
+    fun findNext() {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.findNext()", null) }
+    }
+
+    fun findPrevious() {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.findPrevious()", null) }
+    }
+
+    fun endFind() {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.endFind()", null) }
     }
 
     fun insertImage(src: String, alt: String? = null, resourceId: String? = null) {

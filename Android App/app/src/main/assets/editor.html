@@ -320,6 +320,16 @@
     cursor: pointer;
   }
 
+  /* Find-in-note highlights (see the find plugin in index.ts). Every match gets the
+     dimmed brand yellow; the current match (prev/next) gets the vivid brand yellow. */
+  .ProseMirror .pm-find-match {
+    background: #fbe699;
+    border-radius: 2px;
+  }
+  .ProseMirror .pm-find-current {
+    background: #f9b524;
+  }
+
   /* Highlight */
   .ProseMirror mark {
     background: var(--color-highlight-bg);

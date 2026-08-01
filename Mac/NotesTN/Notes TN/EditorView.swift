@@ -114,6 +114,9 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                 presentMapsChooser(address: address)
             }
 
+        case "findResult":
+            onFindResult?(body["count"] as? Int ?? 0, body["index"] as? Int ?? 0)
+
         case "log":
             if let msg = body["message"] as? String {
                 print("[Editor JS] \(msg)")
@@ -168,6 +171,21 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
     // MARK: Callbacks set by NoteEditorView
     var onContentChanged: ((String, String) -> Void)?
     var onImageRequested: ((String) -> Void)?
+    // In-note find progress: (total matches, 1-based current index; 0 = none).
+    var onFindResult: ((Int, Int) -> Void)?
+
+    // MARK: In-note find
+
+    func find(_ query: String) {
+        guard let wv = webView,
+              let data = try? JSONEncoder().encode(query),
+              let json = String(data: data, encoding: .utf8) else { return }
+        wv.evaluateJavaScript("window.NativeEditor?.find(\(json))")
+    }
+
+    func findNext() { webView?.evaluateJavaScript("window.NativeEditor?.findNext()") }
+    func findPrevious() { webView?.evaluateJavaScript("window.NativeEditor?.findPrevious()") }
+    func endFind() { webView?.evaluateJavaScript("window.NativeEditor?.endFind()") }
 
     // MARK: Commands → JS
 
@@ -426,6 +444,12 @@ struct NoteEditorView: View {
     @StateObject private var editorCoordinator = EditorCoordinator()
     @State private var isShowingImagePicker = false
     @State private var showPermanentDeleteConfirm = false
+    // In-note find (a toolbar button on iPhone, Cmd+Shift+F with a keyboard) —
+    // highlights matches in the editor, distinct from the global note-list search.
+    @State private var showFind = false
+    @State private var findQuery = ""
+    @State private var findCount = 0
+    @State private var findCurrent = 0
     private let noteID: String
     private let initialTitle: String
     private let initialBody: String
@@ -455,6 +479,19 @@ struct NoteEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+
+            // In-note find bar — under the nav bar, above the editor content.
+            if showFind {
+                EditorFindBar(
+                    query: $findQuery,
+                    current: findCurrent,
+                    count: findCount,
+                    onNext: { editorCoordinator.findNext() },
+                    onPrevious: { editorCoordinator.findPrevious() },
+                    onClose: closeFind
+                )
+                Divider()
+            }
 
             // MARK: Toolbar
             // A trashed note is read-only until restored — Restore/Delete Permanently
@@ -527,6 +564,15 @@ struct NoteEditorView: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
+            // In-note find button (iPhone) — iPad triggers find via Cmd+Shift+F instead.
+            if isPhoneIdiom && !readOnly {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { toggleFind() } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
             // iPad only — see isTabletSearchFocused's doc comment above. A separate
             // ToolbarItem from the New Note button above (not merged into one), per
             // earlier request — .sharedBackgroundVisibility(.hidden) on both stops
@@ -563,6 +609,14 @@ struct NoteEditorView: View {
         .onAppear {
             setupCallbacks()
         }
+        // Cmd+Shift+F toggles find (external keyboard on iPad/iPhone); iPhone also has
+        // the toolbar find button above.
+        .background(
+            Button("") { toggleFind() }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .opacity(0)
+        )
+        .onChange(of: findQuery) { _, q in editorCoordinator.find(q) }
         .onChange(of: editorCoordinator.isReady) { _, ready in
             guard ready else { return }
             // Reads the note fresh from AppState (falling back to the init-time
@@ -690,6 +744,24 @@ struct NoteEditorView: View {
                 resourceId: resource.id
             )
         }
+        editorCoordinator.onFindResult = { count, index in
+            findCount = count
+            findCurrent = index
+        }
+    }
+
+    // MARK: Find
+
+    private func toggleFind() {
+        if showFind { closeFind() } else { showFind = true }
+    }
+
+    private func closeFind() {
+        showFind = false
+        findQuery = ""
+        findCount = 0
+        findCurrent = 0
+        editorCoordinator.endFind()
     }
 
     // MARK: Image handling
@@ -768,6 +840,49 @@ struct NoteEditorView: View {
         )
         DatabaseManager.shared.saveResource(resource, dirty: true, synced: false)
         return resource
+    }
+}
+
+// MARK: - Find bar
+
+/// In-note find bar (Cmd+Shift+F on iPad; a toolbar button on iPhone). Search field,
+/// match counter, prev/next, Done. Shared by iPhone (NoteEditorView) and iPad
+/// (PadEditorView).
+struct EditorFindBar: View {
+    @Binding var query: String
+    let current: Int
+    let count: Int
+    var onNext: () -> Void
+    var onPrevious: () -> Void
+    var onClose: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in note", text: $query)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .focused($focused)
+                .onSubmit(onNext)
+            if !query.isEmpty {
+                Text(count > 0 ? "\(current)/\(count)" : "0/0")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Button(action: onPrevious) { Image(systemName: "chevron.up") }
+                .disabled(count == 0)
+            Button(action: onNext) { Image(systemName: "chevron.down") }
+                .disabled(count == 0)
+            Button("Done", action: onClose)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .onAppear { focused = true }
     }
 }
 

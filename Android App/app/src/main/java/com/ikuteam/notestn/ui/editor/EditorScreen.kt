@@ -7,6 +7,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
@@ -36,9 +39,13 @@ import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FormatIndentDecrease
@@ -63,6 +70,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -78,12 +86,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.ikuteam.notestn.data.DatabaseManager
@@ -95,6 +107,7 @@ import com.ikuteam.notestn.ui.common.captureForBackdropBlur
 import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
+import com.ikuteam.notestn.ui.theme.NotesYellowDark
 import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.viewmodel.NotesViewModel
 import kotlinx.coroutines.Dispatchers
@@ -152,6 +165,20 @@ fun EditorScreen(
     // Set when a detected address is tapped — drives the Google Maps / Waze chooser.
     var mapsAddress by remember(note.id) { mutableStateOf<String?>(null) }
 
+    // In-note find (the search icon next to undo/redo). Highlights matches in the
+    // editor and steps through them; independent of the global note-list search.
+    var showFind by remember(note.id) { mutableStateOf(false) }
+    var findQuery by remember(note.id) { mutableStateOf("") }
+    var findCount by remember(note.id) { mutableStateOf(0) }
+    var findCurrent by remember(note.id) { mutableStateOf(0) }
+    fun closeFind() {
+        showFind = false
+        findQuery = ""
+        findCount = 0
+        findCurrent = 0
+        coordinator.endFind()
+    }
+
     // Read vs. edit mode. Read mode (the default) keeps the editor non-editable: a tap
     // interacts with content (open a link, toggle a task, select text) and never pops
     // the keyboard. The pencil FAB enters edit mode; the back gesture or dismissing the
@@ -203,6 +230,10 @@ fun EditorScreen(
             }
         }
         coordinator.onOpenMaps = { address -> mapsAddress = address }
+        coordinator.onFindResult = { count, index ->
+            findCount = count
+            findCurrent = index
+        }
         coordinator.onFocusChanged = { focused ->
             viewModel.isEditorFocused = focused
         }
@@ -265,6 +296,12 @@ fun EditorScreen(
         editMode = false
     }
 
+    // Back closes the find bar first (composed after the editMode handler so it wins
+    // when both are enabled).
+    BackHandler(enabled = showFind) {
+        closeFind()
+    }
+
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -310,6 +347,10 @@ fun EditorScreen(
                             IconButton(onClick = { coordinator.execCommand("redo") }) {
                                 Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
                             }
+                            // In-note find — third button, right of undo/redo.
+                            IconButton(onClick = { showFind = true }) {
+                                Icon(Icons.Filled.Search, contentDescription = "Find in note")
+                            }
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = groupedBackground),
@@ -329,11 +370,28 @@ fun EditorScreen(
                 }
             },
         ) { padding ->
+            Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+                // In-note find bar — sits above the editor (like a browser Find bar)
+                // so it doesn't overlap the note content.
+                if (showFind) {
+                    FindBar(
+                        query = findQuery,
+                        current = findCurrent,
+                        count = findCount,
+                        onQueryChange = { q ->
+                            findQuery = q
+                            coordinator.find(q)
+                        },
+                        onNext = { coordinator.findNext() },
+                        onPrevious = { coordinator.findPrevious() },
+                        onClose = { closeFind() },
+                    )
+                }
             // A Box (not Scaffold's bottomBar slot) so the toolbar floats on top of the
             // WebView instead of reserving its own layout row — that's what lets the
             // area outside the toolbar's border show live note content scrolling
             // underneath it rather than a solid, layout-reserved background.
-            Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+            Box(modifier = Modifier.weight(1f).fillMaxSize()) {
                 // Title lives inside the WebView's shared ProseMirror doc now (see
                 // Mac/EditorBundle's `pm-title` node) so it scrolls together with the
                 // body instead of sitting in a separate native field above it.
@@ -382,6 +440,7 @@ fun EditorScreen(
                         )
                     }
                 }
+            }
             }
         }
     }
@@ -572,6 +631,74 @@ private fun EditorToolbar(
         ToolbarDivider()
         // Debugging aid — view the Markdown source the current HTML converts to.
         ToolbarIconButton(Icons.Filled.DataObject, "View Markdown Source", onShowMarkdownSource)
+    }
+}
+
+// In-note find bar (search field + match counter + prev/next + close). Auto-focuses
+// the field when it appears. Highlighting/stepping happens in the editor via the
+// coordinator's find/findNext/findPrevious.
+@Composable
+private fun FindBar(
+    query: String,
+    current: Int,
+    count: Int,
+    onQueryChange: (String) -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    Surface(tonalElevation = 2.dp, shadowElevation = 2.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(NotesYellowDark),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onNext() }),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
+                decorationBox = { inner ->
+                    if (query.isEmpty()) {
+                        Text("Find in note", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    inner()
+                },
+            )
+            if (count > 0 || query.isNotEmpty()) {
+                Text(
+                    if (count > 0) "$current/$count" else "0/0",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+            }
+            IconButton(onClick = onPrevious, enabled = count > 0) {
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous match")
+            }
+            IconButton(onClick = onNext, enabled = count > 0) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next match")
+            }
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Clear, contentDescription = "Close find")
+            }
+        }
     }
 }
 

@@ -1166,7 +1166,7 @@
     }
   };
   var emptyAttrs = /* @__PURE__ */ Object.create(null);
-  var Node = class _Node {
+  var Node2 = class _Node {
     /**
     @internal
     */
@@ -1568,8 +1568,8 @@
       return node;
     }
   };
-  Node.prototype.text = void 0;
-  var TextNode = class _TextNode extends Node {
+  Node2.prototype.text = void 0;
+  var TextNode = class _TextNode extends Node2 {
     /**
     @internal
     */
@@ -2155,7 +2155,7 @@
     create(attrs = null, content, marks2) {
       if (this.isText)
         throw new Error("NodeType.create can't construct text nodes");
-      return new Node(this, this.computeAttrs(attrs), Fragment.from(content), Mark.setFrom(marks2));
+      return new Node2(this, this.computeAttrs(attrs), Fragment.from(content), Mark.setFrom(marks2));
     }
     /**
     Like [`create`](https://prosemirror.net/docs/ref/#model.NodeType.create), but check the given content
@@ -2165,7 +2165,7 @@
     createChecked(attrs = null, content, marks2) {
       content = Fragment.from(content);
       this.checkContent(content);
-      return new Node(this, this.computeAttrs(attrs), content, Mark.setFrom(marks2));
+      return new Node2(this, this.computeAttrs(attrs), content, Mark.setFrom(marks2));
     }
     /**
     Like [`create`](https://prosemirror.net/docs/ref/#model.NodeType.create), but see if it is
@@ -2188,7 +2188,7 @@
       let after = matched && matched.fillBefore(Fragment.empty, true);
       if (!after)
         return null;
-      return new Node(this, attrs, content.append(after), Mark.setFrom(marks2));
+      return new Node2(this, attrs, content.append(after), Mark.setFrom(marks2));
     }
     /**
     Returns true if the given fragment is valid content for this node
@@ -2384,7 +2384,7 @@
         let type = this.marks[prop], excl = type.spec.excludes;
         type.excluded = excl == null ? [type] : excl == "" ? [] : gatherMarks(this, excl.split(" "));
       }
-      this.nodeFromJSON = (json) => Node.fromJSON(this, json);
+      this.nodeFromJSON = (json) => Node2.fromJSON(this, json);
       this.markFromJSON = (json) => Mark.fromJSON(this, json);
       this.topNodeType = this.nodes[this.spec.topNode || "doc"];
       this.cached.wrappings = /* @__PURE__ */ Object.create(null);
@@ -6019,7 +6019,7 @@
       let instance = new _EditorState($config);
       $config.fields.forEach((field) => {
         if (field.name == "doc") {
-          instance.doc = Node.fromJSON(config.schema, json.doc);
+          instance.doc = Node2.fromJSON(config.schema, json.doc);
         } else if (field.name == "selection") {
           instance.selection = Selection.fromJSON(instance.doc, json.selection);
         } else if (field.name == "storedMarks") {
@@ -15387,6 +15387,54 @@
     });
     return DecorationSet.create(doc3, decos);
   }
+  var findKey = new PluginKey("find");
+  function collectDocText(doc3) {
+    let text = "";
+    const map2 = [];
+    doc3.descendants((node, pos) => {
+      if (node.isText && node.text) {
+        for (let i = 0; i < node.text.length; i++) {
+          text += node.text[i];
+          map2.push(pos + i);
+        }
+      } else if (node.isBlock) {
+        if (text.length && text[text.length - 1] !== "\n") {
+          text += "\n";
+          map2.push(pos);
+        }
+      }
+      return true;
+    });
+    return { text, map: map2 };
+  }
+  function computeFindMatches(doc3, query) {
+    if (!query) return [];
+    const { text, map: map2 } = collectDocText(doc3);
+    const haystack = text.toLowerCase();
+    const needle = query.toLowerCase();
+    const matches2 = [];
+    let from2 = 0;
+    while (from2 <= haystack.length) {
+      const idx = haystack.indexOf(needle, from2);
+      if (idx < 0) break;
+      const startPos = map2[idx];
+      const endPos = map2[idx + needle.length - 1] + 1;
+      if (startPos !== void 0 && endPos !== void 0) {
+        matches2.push({ from: startPos, to: endPos });
+      }
+      from2 = idx + needle.length;
+    }
+    return matches2;
+  }
+  function findDecorations(doc3, state) {
+    if (!state.matches.length) return DecorationSet.empty;
+    const decos = state.matches.map(
+      (m, i) => Decoration.inline(m.from, m.to, {
+        class: i === state.current ? "pm-find-match pm-find-current" : "pm-find-match"
+      })
+    );
+    return DecorationSet.create(doc3, decos);
+  }
   function stripPastedTables(html) {
     const dom = new DOMParser().parseFromString(html, "text/html");
     let tables = Array.from(dom.body.querySelectorAll("table"));
@@ -15618,6 +15666,47 @@
             }
           }
         }),
+        // Find in note — holds query/matches/current and renders them as decorations.
+        // Driven by the find/findNext/findPrevious/endFind bridge methods, which
+        // dispatch meta-only transactions (no doc change) picked up in apply below.
+        new Plugin({
+          key: findKey,
+          state: {
+            init: () => ({ query: "", matches: [], current: -1 }),
+            apply: (tr, prev, _old, newState) => {
+              const meta = tr.getMeta(findKey);
+              if (meta) {
+                if (meta.type === "clear") return { query: "", matches: [], current: -1 };
+                if (meta.type === "set") {
+                  const query = meta.query ?? "";
+                  const matches2 = computeFindMatches(newState.doc, query);
+                  const head = newState.selection.head;
+                  let current = matches2.findIndex((m) => m.from >= head);
+                  if (current < 0) current = matches2.length ? 0 : -1;
+                  return { query, matches: matches2, current };
+                }
+                if ((meta.type === "next" || meta.type === "prev") && prev.matches.length) {
+                  const step = meta.type === "next" ? 1 : -1;
+                  const current = (prev.current + step + prev.matches.length) % prev.matches.length;
+                  return { ...prev, current };
+                }
+                return prev;
+              }
+              if (tr.docChanged && prev.query) {
+                const matches2 = computeFindMatches(newState.doc, prev.query);
+                const current = matches2.length ? Math.min(Math.max(prev.current, 0), matches2.length - 1) : -1;
+                return { ...prev, matches: matches2, current };
+              }
+              return prev;
+            }
+          },
+          props: {
+            decorations(editorState) {
+              const st = findKey.getState(editorState);
+              return st ? findDecorations(editorState.doc, st) : null;
+            }
+          }
+        }),
         // Auto-linkify pasted URLs
         new Plugin({
           props: {
@@ -15835,6 +15924,20 @@
       log(`Editor init error: ${err}`);
       return;
     }
+    const afterFindUpdate = () => {
+      const st = findKey.getState(view.state);
+      if (!st) return;
+      const match = st.current >= 0 ? st.matches[st.current] : void 0;
+      if (match) {
+        try {
+          const domAt = view.domAtPos(match.from);
+          const el = domAt.node.nodeType === Node.TEXT_NODE ? domAt.node.parentElement : domAt.node;
+          el == null ? void 0 : el.scrollIntoView({ block: "center", behavior: "smooth" });
+        } catch (_) {
+        }
+      }
+      postToNative({ type: "findResult", count: st.matches.length, index: st.current >= 0 ? st.current + 1 : 0 });
+    };
     const bridge = {
       setContent(title, body) {
         const domParser = new DOMParser();
@@ -15865,6 +15968,22 @@
       setEditable(value) {
         var _a;
         (_a = view.__setEditable) == null ? void 0 : _a.call(view, value);
+      },
+      // ── Find in note ──
+      find(query) {
+        view.dispatch(view.state.tr.setMeta(findKey, { type: "set", query }));
+        afterFindUpdate();
+      },
+      findNext() {
+        view.dispatch(view.state.tr.setMeta(findKey, { type: "next" }));
+        afterFindUpdate();
+      },
+      findPrevious() {
+        view.dispatch(view.state.tr.setMeta(findKey, { type: "prev" }));
+        afterFindUpdate();
+      },
+      endFind() {
+        view.dispatch(view.state.tr.setMeta(findKey, { type: "clear" }));
       },
       focus() {
         view.focus();

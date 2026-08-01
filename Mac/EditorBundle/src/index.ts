@@ -46,13 +46,17 @@ interface NativeMessage {
   // openMaps carries a plain address string in `url`; native shows a Google Maps /
   // Waze chooser and opens the chosen app. Everything else routes through openUrl
   // with a fully-formed scheme URL (https:, mailto:, tel:).
-  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged';
+  // findResult reports in-note find progress to the native find bar: `count` total
+  // matches and `index` the 1-based current match (0 when there are none).
+  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged' | 'findResult';
   title?: string;
   html?: string;
   selectionState?: SelectionState;
   message?: string;
   url?: string;
   focused?: boolean;
+  count?: number;
+  index?: number;
 }
 
 // ── Swift bridge ──────────────────────────────────────────────────────────────
@@ -248,6 +252,74 @@ function buildAutoLinkDecos(doc: any): DecorationSet {
       );
     }
   });
+  return DecorationSet.create(doc, decos);
+}
+
+// ── Find in note (in-editor search + highlight) ────────────────────────────────
+//
+// A find plugin holds the current query, the matched ranges, and the "current"
+// match index, and renders them as decorations (light-yellow for all matches, a
+// stronger yellow for the current one). Driven imperatively by the native find bar
+// through the setContent-style bridge methods (find / findNext / findPrevious /
+// endFind); it never mutates the document.
+
+const findKey = new PluginKey<FindState>('find');
+
+interface FindMatch { from: number; to: number; }
+interface FindState { query: string; matches: FindMatch[]; current: number; }
+
+/** Flattens the doc into a single lowercased string plus a per-character map back to
+ * document positions, inserting a newline (mapped to the block boundary) between
+ * blocks so a match can't span across block nodes. */
+function collectDocText(doc: any): { text: string; map: number[] } {
+  let text = '';
+  const map: number[] = [];
+  doc.descendants((node: any, pos: number) => {
+    if (node.isText && node.text) {
+      for (let i = 0; i < node.text.length; i++) {
+        text += node.text[i];
+        map.push(pos + i);
+      }
+    } else if (node.isBlock) {
+      if (text.length && text[text.length - 1] !== '\n') {
+        text += '\n';
+        map.push(pos);
+      }
+    }
+    return true;
+  });
+  return { text, map };
+}
+
+function computeFindMatches(doc: any, query: string): FindMatch[] {
+  if (!query) return [];
+  const { text, map } = collectDocText(doc);
+  const haystack = text.toLowerCase();
+  const needle = query.toLowerCase();
+  const matches: FindMatch[] = [];
+  let from = 0;
+  while (from <= haystack.length) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx < 0) break;
+    const startPos = map[idx];
+    const endPos = map[idx + needle.length - 1] + 1;
+    if (startPos !== undefined && endPos !== undefined) {
+      matches.push({ from: startPos, to: endPos });
+    }
+    from = idx + needle.length;
+  }
+  return matches;
+}
+
+/** Decorations for the current find state: every match gets pm-find-match, the
+ * current one additionally gets pm-find-current. */
+function findDecorations(doc: any, state: FindState): DecorationSet {
+  if (!state.matches.length) return DecorationSet.empty;
+  const decos = state.matches.map((m, i) =>
+    Decoration.inline(m.from, m.to, {
+      class: i === state.current ? 'pm-find-match pm-find-current' : 'pm-find-match',
+    }),
+  );
   return DecorationSet.create(doc, decos);
 }
 
@@ -557,6 +629,50 @@ function createEditor(): EditorView {
         },
       }),
 
+      // Find in note — holds query/matches/current and renders them as decorations.
+      // Driven by the find/findNext/findPrevious/endFind bridge methods, which
+      // dispatch meta-only transactions (no doc change) picked up in apply below.
+      new Plugin({
+        key: findKey,
+        state: {
+          init: (): FindState => ({ query: '', matches: [], current: -1 }),
+          apply: (tr, prev: FindState, _old, newState): FindState => {
+            const meta = tr.getMeta(findKey) as { type: string; query?: string } | undefined;
+            if (meta) {
+              if (meta.type === 'clear') return { query: '', matches: [], current: -1 };
+              if (meta.type === 'set') {
+                const query = meta.query ?? '';
+                const matches = computeFindMatches(newState.doc, query);
+                // Start at the first match at/after the caret, else the first match.
+                const head = newState.selection.head;
+                let current = matches.findIndex((m) => m.from >= head);
+                if (current < 0) current = matches.length ? 0 : -1;
+                return { query, matches, current };
+              }
+              if ((meta.type === 'next' || meta.type === 'prev') && prev.matches.length) {
+                const step = meta.type === 'next' ? 1 : -1;
+                const current = (prev.current + step + prev.matches.length) % prev.matches.length;
+                return { ...prev, current };
+              }
+              return prev;
+            }
+            // Keep matches in sync as the document changes while find is open.
+            if (tr.docChanged && prev.query) {
+              const matches = computeFindMatches(newState.doc, prev.query);
+              const current = matches.length ? Math.min(Math.max(prev.current, 0), matches.length - 1) : -1;
+              return { ...prev, matches, current };
+            }
+            return prev;
+          },
+        },
+        props: {
+          decorations(editorState) {
+            const st = findKey.getState(editorState);
+            return st ? findDecorations(editorState.doc, st) : null;
+          },
+        },
+      }),
+
       // Auto-linkify pasted URLs
       new Plugin({
         props: {
@@ -823,6 +939,10 @@ interface NativeEditorBridge {
   setContent: (title: string, body: string) => void;
   execCommand: (command: string, value?: any) => void;
   setEditable: (value: boolean) => void;
+  find: (query: string) => void;
+  findNext: () => void;
+  findPrevious: () => void;
+  endFind: () => void;
   focus: () => void;
   blur: () => void;
   getHTML: () => string;
@@ -856,6 +976,24 @@ document.addEventListener('DOMContentLoaded', () => {
     log(`Editor init error: ${err}`);
     return;
   }
+
+  // After a find/findNext/findPrevious dispatch: scroll the current match into view
+  // (without moving the selection) and report count/index to the native find bar.
+  const afterFindUpdate = () => {
+    const st = findKey.getState(view.state);
+    if (!st) return;
+    const match = st.current >= 0 ? st.matches[st.current] : undefined;
+    if (match) {
+      try {
+        const domAt = view.domAtPos(match.from);
+        const el = domAt.node.nodeType === Node.TEXT_NODE ? domAt.node.parentElement : (domAt.node as HTMLElement);
+        el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (_) {
+        // position not resolvable this frame — ignore
+      }
+    }
+    postToNative({ type: 'findResult', count: st.matches.length, index: st.current >= 0 ? st.current + 1 : 0 });
+  };
 
   const bridge: NativeEditorBridge = {
     setContent(title: string, body: string) {
@@ -909,6 +1047,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setEditable(value: boolean) {
       (view as EditorViewWithSetEditable).__setEditable?.(value);
+    },
+
+    // ── Find in note ──
+    find(query: string) {
+      view.dispatch(view.state.tr.setMeta(findKey, { type: 'set', query }));
+      afterFindUpdate();
+    },
+    findNext() {
+      view.dispatch(view.state.tr.setMeta(findKey, { type: 'next' }));
+      afterFindUpdate();
+    },
+    findPrevious() {
+      view.dispatch(view.state.tr.setMeta(findKey, { type: 'prev' }));
+      afterFindUpdate();
+    },
+    endFind() {
+      view.dispatch(view.state.tr.setMeta(findKey, { type: 'clear' }));
     },
 
     focus() {

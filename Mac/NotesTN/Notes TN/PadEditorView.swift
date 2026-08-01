@@ -61,6 +61,12 @@ private struct PadNoteEditorView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var editorCoordinator = EditorCoordinator()
     @State private var isShowingImagePicker = false
+    // In-note find (Cmd+Shift+F) — highlights matches in the editor, distinct from the
+    // global note-list search.
+    @State private var showFind = false
+    @State private var findQuery = ""
+    @State private var findCount = 0
+    @State private var findCurrent = 0
 
     private let noteID: String
     private let initialTitle: String
@@ -81,8 +87,34 @@ private struct PadNoteEditorView: View {
         appState.notes.first { $0.id == noteID } ?? appState.trashedNotes.first { $0.id == noteID }
     }
 
+    private func toggleFind() {
+        if showFind { closeFind() } else { showFind = true }
+    }
+
+    private func closeFind() {
+        showFind = false
+        findQuery = ""
+        findCount = 0
+        findCurrent = 0
+        editorCoordinator.endFind()
+    }
+
     var body: some View {
-        RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
+        VStack(spacing: 0) {
+            // In-note find bar — above the editor content (Cmd+Shift+F).
+            if showFind {
+                EditorFindBar(
+                    query: $findQuery,
+                    current: findCurrent,
+                    count: findCount,
+                    onNext: { editorCoordinator.findNext() },
+                    onPrevious: { editorCoordinator.findPrevious() },
+                    onClose: closeFind
+                )
+                Divider()
+            }
+            RichTextEditorView(coordinator: editorCoordinator, readOnly: readOnly)
+        }
             .onAppear {
                 editorCoordinator.onContentChanged = { title, html in
                     // Falls back to the DB copy when the note isn't in appState.notes
@@ -95,7 +127,17 @@ private struct PadNoteEditorView: View {
                     updated.body = html
                     appState.saveNote(updated)
                 }
+                editorCoordinator.onFindResult = { count, index in
+                    findCount = count
+                    findCurrent = index
+                }
             }
+            .background(
+                Button("") { toggleFind() }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .opacity(0)
+            )
+            .onChange(of: findQuery) { _, q in editorCoordinator.find(q) }
             .onChange(of: editorCoordinator.isReady) { _, ready in
                 guard ready else { return }
                 // Reads the note fresh from AppState (falling back to the init-time
