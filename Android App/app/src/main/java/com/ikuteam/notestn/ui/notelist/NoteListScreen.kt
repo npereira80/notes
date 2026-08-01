@@ -93,7 +93,6 @@ import com.ikuteam.notestn.ui.theme.GroupedBackgroundLight
 import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveDark
 import com.ikuteam.notestn.ui.theme.NoteRowSelectedInactiveLight
 import com.ikuteam.notestn.ui.theme.NotesYellowDimmed
-import com.ikuteam.notestn.ui.theme.NotesYellowTextSelect
 import com.ikuteam.notestn.ui.theme.NotesYellowVivid
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
@@ -482,15 +481,15 @@ fun NoteListScreen(
 
 /**
  * Returns [text] as an AnnotatedString with every case-insensitive occurrence of
- * [query] given a yellow-tint background — used to highlight the matched text in note
- * list search results. Matching is done on the original text with ignoreCase (no
- * lowercasing, so match lengths stay aligned to the source). Returns the plain text
- * when [query] is empty.
+ * [query] given a strong-yellow background — used to highlight the matched text in
+ * note list search results, matching the in-note find's current-match highlight.
+ * Matching is done on the original text with ignoreCase (no lowercasing, so match
+ * lengths stay aligned to the source). Returns the plain text when [query] is empty.
  */
 private fun highlightMatches(
     text: String,
     query: String,
-    background: Color = NotesYellowTextSelect,
+    background: Color = NotesYellowVivid,
 ): AnnotatedString {
     if (query.isEmpty()) return AnnotatedString(text)
     return buildAnnotatedString {
