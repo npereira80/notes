@@ -385,6 +385,25 @@ const guardBackspaceIntoTitle = (state: EditorState, dispatch?: (tr: Transaction
   return false;
 };
 
+// True when the cursor's list item is the FIRST item of its list. Backspace only
+// lifts an empty item out to a paragraph in that case; for a non-first empty item we
+// let the base keymap's joinBackward merge it into the previous item instead (cursor
+// moves to the end of the previous line, so you keep deleting there). Lifting a
+// non-first item used to drop it below the list as a paragraph, which the next
+// Backspace re-absorbed into the list — the "delete the bullet, then it comes back"
+// bug.
+function isFirstListItem(state: EditorState): boolean {
+  const { list_item, task_list_item } = schema.nodes;
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type === list_item || node.type === task_list_item) {
+      return $from.index(d - 1) === 0;
+    }
+  }
+  return false;
+}
+
 function buildKeymap() {
   const { list_item, task_list_item } = schema.nodes;
   const listItemTypes = [list_item, task_list_item];
@@ -410,16 +429,22 @@ function buildKeymap() {
       exitCode,
     ),
 
-    // Lift out with Backspace — only when cursor is at the very start of an empty list item.
-    // Without the parentOffset guard, liftListItem fires mid-word and removes list formatting.
+    // Lift out with Backspace — only when the cursor is at the very start of an empty
+    // list item AND it's the first item of its list (see isFirstListItem). The
+    // parentOffset guard stops liftListItem firing mid-word; the first-item guard
+    // stops it firing on a later empty item, where the cursor should instead join
+    // back into the previous item (handled by the base keymap's joinBackward when
+    // these commands return false).
     'Backspace': chainCommands(
       guardBackspaceIntoTitle,
       (state, dispatch) => {
         if (state.selection.$from.parentOffset > 0) return false;
+        if (!isFirstListItem(state)) return false;
         return liftListItem(task_list_item)(state, dispatch);
       },
       (state, dispatch) => {
         if (state.selection.$from.parentOffset > 0) return false;
+        if (!isFirstListItem(state)) return false;
         return liftListItem(list_item)(state, dispatch);
       },
     ),

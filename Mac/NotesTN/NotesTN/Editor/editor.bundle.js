@@ -15472,6 +15472,17 @@
     if ($from.pos === afterTitle + 1 && $from.parentOffset === 0) return true;
     return false;
   };
+  function isFirstListItem(state) {
+    const { list_item, task_list_item } = schema_default.nodes;
+    const { $from } = state.selection;
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type === list_item || node.type === task_list_item) {
+        return $from.index(d - 1) === 0;
+      }
+    }
+    return false;
+  }
   function buildKeymap() {
     const { list_item, task_list_item } = schema_default.nodes;
     const listItemTypes = [list_item, task_list_item];
@@ -15493,16 +15504,22 @@
         newlineInCode,
         exitCode
       ),
-      // Lift out with Backspace — only when cursor is at the very start of an empty list item.
-      // Without the parentOffset guard, liftListItem fires mid-word and removes list formatting.
+      // Lift out with Backspace — only when the cursor is at the very start of an empty
+      // list item AND it's the first item of its list (see isFirstListItem). The
+      // parentOffset guard stops liftListItem firing mid-word; the first-item guard
+      // stops it firing on a later empty item, where the cursor should instead join
+      // back into the previous item (handled by the base keymap's joinBackward when
+      // these commands return false).
       "Backspace": chainCommands(
         guardBackspaceIntoTitle,
         (state, dispatch) => {
           if (state.selection.$from.parentOffset > 0) return false;
+          if (!isFirstListItem(state)) return false;
           return liftListItem(task_list_item)(state, dispatch);
         },
         (state, dispatch) => {
           if (state.selection.$from.parentOffset > 0) return false;
+          if (!isFirstListItem(state)) return false;
           return liftListItem(list_item)(state, dispatch);
         }
       )
