@@ -236,24 +236,25 @@
   .ProseMirror ul[data-is-checklist] li {
     display: flex;
     align-items: flex-start;
-    gap: 6px;
+    gap: 8px;
   }
   .ProseMirror ul[data-is-checklist] li input[type="checkbox"] {
     flex-shrink: 0;
     cursor: pointer;
-    width: 15px;
-    height: 15px;
+    width: 20px;
+    height: 20px;
     /* appearance: none — a bare native checkbox otherwise ignores border/background
        color entirely and renders the OS's own control chrome (a light-mode-looking
        white box, system-accent blue when checked), which is why it didn't follow
        the page's light/dark theme or the app's brand color before. */
     appearance: none;
     -webkit-appearance: none;
-    /* 6px = original 3px + 3px more, per request, to align with the text baseline
-       instead of sitting too high. */
-    margin: 6px 0 0 0;
+    /* Small top margin to sit the circle roughly centered on the first text line
+       (may need a pixel of adjustment across font sizes). */
+    margin: 2px 0 0 0;
     border: 1.5px solid var(--color-checkbox-border);
-    border-radius: 4px;
+    /* Round (circular) checkbox — a full 50% radius. */
+    border-radius: 50%;
     background: transparent;
   }
   /* Fill/checkmark is driven ONLY by the parent li's .checked CLASS (set from
