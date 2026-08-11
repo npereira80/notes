@@ -342,8 +342,8 @@ function writeEditorHtml(outDir) {
     /* Small top margin to sit the circle roughly centered on the first text line
        (may need a pixel of adjustment across font sizes). Raised from 2px along
        with the 20px-to-18px size change, so the circle's center stays put, and
-       then 1px more to sit it properly on the text's baseline. */
-    margin: 4px 0 0 0;
+       then 2px more to sit it properly on the text's baseline. */
+    margin: 5px 0 0 0;
     border: 1.5px solid var(--color-checkbox-border);
     /* Round (circular) checkbox — a full 50% radius. */
     border-radius: 50%;
@@ -356,12 +356,12 @@ function writeEditorHtml(outDir) {
      suppressed here and replaced by a circular state layer like Material's own
      checkbox, as a box-shadow spread so it follows the 50% radius and doesn't
      affect layout. The class comes from a decoration on the list item, set on
-     tap by flashCheckbox in index.ts (not from :active, which never applies
+     tap by flashCheckboxAt in index.ts (not from :active, which never applies
      here because that handler calls preventDefault). */
   body.pm-android .ProseMirror ul[data-is-checklist] li input[type="checkbox"] {
     -webkit-tap-highlight-color: transparent;
   }
-  body.pm-android .ProseMirror ul[data-is-checklist] li.pm-checkbox-tapped input[type="checkbox"] {
+  body.pm-android .ProseMirror ul[data-is-checklist] li.pm-tapped input[type="checkbox"] {
     box-shadow: 0 0 0 6px var(--color-state-layer);
   }
   /* Fill/checkmark is driven ONLY by the parent li's .checked CLASS (set from
@@ -563,6 +563,18 @@ function writeEditorHtml(outDir) {
   }
   /* Hover just darkens the chevron itself — no background box behind it. */
   .ProseMirror .pm-heading-arrow:hover { color: var(--color-text); }
+  /* Android only, and for the same reason as the checkbox above: its WebView's own
+     tap highlight is a square around the chevron's box. Suppressed, and replaced by
+     the round state layer a Material icon button shows when tapped. The class comes
+     from a decoration set by flashNodeAt in index.ts. */
+  body.pm-android .ProseMirror .pm-heading-arrow {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.pm-android .ProseMirror .pm-tapped .pm-heading-arrow {
+    border-radius: 50%;
+    background: var(--color-state-layer);
+    box-shadow: 0 0 0 4px var(--color-state-layer);
+  }
   /* Collapsed: chevron points right (h1/"Title" has no arrow at all — see
      schema.ts's heading toDOM) */
   .ProseMirror h2[data-collapsed] .pm-heading-arrow::after,

@@ -1079,61 +1079,66 @@ function stateToParts(state: EditorState): { title: string; body: string } {
   return { title: titleNode.textContent, body: div.innerHTML };
 }
 
-// ── Android checkbox tap highlight ────────────────────────────────────────────
+// ── Android tap highlight ─────────────────────────────────────────────────────
 
-/** Android's round tap highlight for task checkboxes. Its WebView draws the
- * default one as a square around the round box, so that one is suppressed in CSS
- * and this marks the tapped item instead — see the pm-checkbox-tapped rules in
- * build.mjs.
+/** Android's round tap highlight for the controls inside a note — a task checkbox,
+ * a heading's collapse chevron. Its WebView draws the default one as the element's
+ * rectangle, which flashes a square around a round or oddly shaped control, so that
+ * one is suppressed in CSS and this marks the tapped node instead. The pm-tapped
+ * rules in build.mjs draw what's actually seen.
  *
- * A decoration, not a class written straight onto the input: toggling a checkbox
- * changes the item's attrs, which re-renders it from toDOM and would drop any
- * class we'd set by hand. Decorations are re-applied after every render, so the
+ * A decoration, not a class written straight onto the element: tapping either
+ * control changes its node's attrs, which re-renders it from toDOM and would drop
+ * any class we'd set by hand. Decorations are re-applied after every render, so the
  * highlight survives the very transaction that triggers it. */
-const checkboxFlashKey = new PluginKey<DecorationSet>('checkboxFlash');
+const tapFlashKey = new PluginKey<DecorationSet>('tapFlash');
 
 /** How long the highlight stays up. Roughly Material's own state-layer fade. */
-const CHECKBOX_FLASH_MS = 200;
+const TAP_FLASH_MS = 200;
 
-let checkboxFlashTimer: ReturnType<typeof setTimeout> | null = null;
+let tapFlashTimer: ReturnType<typeof setTimeout> | null = null;
 
-function flashCheckbox(view: EditorView, pos: number) {
-  const $pos = view.state.doc.resolve(pos);
-  let itemPos: number | null = null;
-  for (let d = $pos.depth; d >= 0; d--) {
-    if ($pos.node(d).type === schema.nodes.task_list_item) {
-      itemPos = $pos.before(d);
-      break;
-    }
-  }
-  if (itemPos === null) return;
-
-  if (checkboxFlashTimer) clearTimeout(checkboxFlashTimer);
-  view.dispatch(view.state.tr.setMeta(checkboxFlashKey, itemPos));
-  checkboxFlashTimer = setTimeout(() => {
-    checkboxFlashTimer = null;
-    view.dispatch(view.state.tr.setMeta(checkboxFlashKey, null));
-  }, CHECKBOX_FLASH_MS);
+/** Flashes the node starting at [pos]. */
+function flashNodeAt(view: EditorView, pos: number) {
+  if (!view.state.doc.nodeAt(pos)) return;
+  if (tapFlashTimer) clearTimeout(tapFlashTimer);
+  view.dispatch(view.state.tr.setMeta(tapFlashKey, pos));
+  tapFlashTimer = setTimeout(() => {
+    tapFlashTimer = null;
+    view.dispatch(view.state.tr.setMeta(tapFlashKey, null));
+  }, TAP_FLASH_MS);
 }
 
-const checkboxFlashPlugin = new Plugin<DecorationSet>({
-  key: checkboxFlashKey,
+/** Flashes the task item around [pos] — the checkbox itself is inside it, so the
+ * whole item carries the class and the CSS picks the checkbox back out. */
+function flashCheckboxAt(view: EditorView, pos: number) {
+  const $pos = view.state.doc.resolve(pos);
+  for (let d = $pos.depth; d >= 0; d--) {
+    if ($pos.node(d).type === schema.nodes.task_list_item) {
+      flashNodeAt(view, $pos.before(d));
+      return;
+    }
+  }
+}
+
+const tapFlashPlugin = new Plugin<DecorationSet>({
+  key: tapFlashKey,
   state: {
     init: () => DecorationSet.empty,
     apply(tr, old) {
-      const meta = tr.getMeta(checkboxFlashKey) as number | null | undefined;
+      const meta = tr.getMeta(tapFlashKey) as number | null | undefined;
       if (meta === undefined) return old.map(tr.mapping, tr.doc);
       if (meta === null) return DecorationSet.empty;
       const node = tr.doc.nodeAt(meta);
       if (!node) return DecorationSet.empty;
       return DecorationSet.create(tr.doc, [
-        Decoration.node(meta, meta + node.nodeSize, { class: 'pm-checkbox-tapped' }),
+        Decoration.node(meta, meta + node.nodeSize, { class: 'pm-tapped' }),
       ]);
     },
   },
   props: {
     decorations(state) {
-      return checkboxFlashKey.getState(state) ?? DecorationSet.empty;
+      return tapFlashKey.getState(state) ?? DecorationSet.empty;
     },
   },
 });
@@ -1502,6 +1507,9 @@ function createEditor(): EditorView {
                   ...node.attrs,
                   collapsed: !node.attrs.collapsed,
                 }));
+                // Android only: the round tap highlight that stands in for the square
+                // one its WebView would draw around the chevron (see flashNodeAt).
+                if (isAndroid) flashNodeAt(view, pos);
                 return true;
               }
               return false;
@@ -1551,8 +1559,8 @@ function createEditor(): EditorView {
         },
       }),
 
-      // Android's round checkbox tap highlight (see flashCheckbox above).
-      checkboxFlashPlugin,
+      // Android's round tap highlight for checkboxes and chevrons (see flashNodeAt).
+      tapFlashPlugin,
 
       // Handle checkbox clicks in task list items
       new Plugin({
@@ -1574,7 +1582,7 @@ function createEditor(): EditorView {
                 // square one its WebView would have drawn. Done here rather than
                 // with :active, which the preventDefault above stops Chromium
                 // from ever applying.
-                if (isAndroid) flashCheckbox(view, pos);
+                if (isAndroid) flashCheckboxAt(view, pos);
                 return true;
               }
               return false;

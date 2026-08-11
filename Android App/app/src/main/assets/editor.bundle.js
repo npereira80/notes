@@ -15886,44 +15886,45 @@
     div.appendChild(serializer.serializeFragment(bodyFragment));
     return { title: titleNode.textContent, body: div.innerHTML };
   }
-  var checkboxFlashKey = new PluginKey("checkboxFlash");
-  var CHECKBOX_FLASH_MS = 200;
-  var checkboxFlashTimer = null;
-  function flashCheckbox(view, pos) {
+  var tapFlashKey = new PluginKey("tapFlash");
+  var TAP_FLASH_MS = 200;
+  var tapFlashTimer = null;
+  function flashNodeAt(view, pos) {
+    if (!view.state.doc.nodeAt(pos)) return;
+    if (tapFlashTimer) clearTimeout(tapFlashTimer);
+    view.dispatch(view.state.tr.setMeta(tapFlashKey, pos));
+    tapFlashTimer = setTimeout(() => {
+      tapFlashTimer = null;
+      view.dispatch(view.state.tr.setMeta(tapFlashKey, null));
+    }, TAP_FLASH_MS);
+  }
+  function flashCheckboxAt(view, pos) {
     const $pos = view.state.doc.resolve(pos);
-    let itemPos = null;
     for (let d = $pos.depth; d >= 0; d--) {
       if ($pos.node(d).type === schema_default.nodes.task_list_item) {
-        itemPos = $pos.before(d);
-        break;
+        flashNodeAt(view, $pos.before(d));
+        return;
       }
     }
-    if (itemPos === null) return;
-    if (checkboxFlashTimer) clearTimeout(checkboxFlashTimer);
-    view.dispatch(view.state.tr.setMeta(checkboxFlashKey, itemPos));
-    checkboxFlashTimer = setTimeout(() => {
-      checkboxFlashTimer = null;
-      view.dispatch(view.state.tr.setMeta(checkboxFlashKey, null));
-    }, CHECKBOX_FLASH_MS);
   }
-  var checkboxFlashPlugin = new Plugin({
-    key: checkboxFlashKey,
+  var tapFlashPlugin = new Plugin({
+    key: tapFlashKey,
     state: {
       init: () => DecorationSet.empty,
       apply(tr, old) {
-        const meta = tr.getMeta(checkboxFlashKey);
+        const meta = tr.getMeta(tapFlashKey);
         if (meta === void 0) return old.map(tr.mapping, tr.doc);
         if (meta === null) return DecorationSet.empty;
         const node = tr.doc.nodeAt(meta);
         if (!node) return DecorationSet.empty;
         return DecorationSet.create(tr.doc, [
-          Decoration.node(meta, meta + node.nodeSize, { class: "pm-checkbox-tapped" })
+          Decoration.node(meta, meta + node.nodeSize, { class: "pm-tapped" })
         ]);
       }
     },
     props: {
       decorations(state) {
-        return checkboxFlashKey.getState(state) ?? DecorationSet.empty;
+        return tapFlashKey.getState(state) ?? DecorationSet.empty;
       }
     }
   });
@@ -16210,6 +16211,7 @@
                     ...node.attrs,
                     collapsed: !node.attrs.collapsed
                   }));
+                  if (isAndroid) flashNodeAt(view2, pos);
                   return true;
                 }
                 return false;
@@ -16253,8 +16255,8 @@
             }
           }
         }),
-        // Android's round checkbox tap highlight (see flashCheckbox above).
-        checkboxFlashPlugin,
+        // Android's round tap highlight for checkboxes and chevrons (see flashNodeAt).
+        tapFlashPlugin,
         // Handle checkbox clicks in task list items
         new Plugin({
           props: {
@@ -16266,7 +16268,7 @@
                   event.preventDefault();
                   const pos = view2.posAtDOM(target, 0);
                   toggleCheckboxAtPos(view2, pos);
-                  if (isAndroid) flashCheckbox(view2, pos);
+                  if (isAndroid) flashCheckboxAt(view2, pos);
                   return true;
                 }
                 return false;
