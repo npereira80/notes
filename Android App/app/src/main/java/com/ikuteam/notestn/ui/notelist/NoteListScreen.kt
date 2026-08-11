@@ -349,6 +349,8 @@ fun NoteListScreen(
                             isTrash = isTrash,
                             // Highlights the matched text in this result's title/preview.
                             highlightQuery = searchText,
+                            // Flat search results sit directly on the screen background.
+                            surface = groupedBackground,
                             onClick = { onNoteClick(note) },
                             onDelete = { viewModel.deleteNote(note) },
                             onRestore = { viewModel.restoreNote(note) },
@@ -553,6 +555,8 @@ private fun LazyListScope.noteCardRows(
                 selected = note.id == selectedNoteId,
                 editorFocused = editorFocused,
                 isTrash = isTrash,
+                // Grouped rows sit on the section card.
+                surface = cardBackground,
                 onClick = { onNoteClick(note) },
                 onDelete = { viewModel.deleteNote(note) },
                 onRestore = { viewModel.restoreNote(note) },
@@ -731,6 +735,7 @@ private fun SwipeActionsRow(
     onDelete: () -> Unit,
     isPinned: Boolean,
     enabled: Boolean,
+    surface: Color,
     content: @Composable () -> Unit,
 ) {
     if (!enabled) {
@@ -740,13 +745,18 @@ private fun SwipeActionsRow(
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {
+                // Pin: the note stays in the list, so accept the action but let the
+                // row settle back into place (returning false).
                 SwipeToDismissBoxValue.StartToEnd -> {
                     onPin()
-                    false // the row stays in the list, so settle it back
+                    false
                 }
+                // Delete: returning true dismisses the row, so it animates fully off
+                // screen the way SwipeToDismissBox does by default. The note is then
+                // gone from the list (it moved to Trash), so the row is disposed.
                 SwipeToDismissBoxValue.EndToStart -> {
                     onDelete()
-                    false // the note leaves the list on its own once it's trashed
+                    true
                 }
                 SwipeToDismissBoxValue.Settled -> false
             }
@@ -786,7 +796,14 @@ private fun SwipeActionsRow(
                 }
             }
         },
-        content = { content() },
+        // The row must be OPAQUE, otherwise the coloured panel behind it shows
+        // straight through and the whole row appears to change colour as soon as the
+        // swipe starts. Painting the surface it sits on means the colour is only
+        // visible in the strip the row has actually slid away from — the behaviour
+        // in Android's swipe-to-dismiss guidance.
+        content = {
+            Box(modifier = Modifier.fillMaxWidth().background(surface)) { content() }
+        },
     )
 }
 
@@ -799,6 +816,9 @@ private fun NoteRow(
     editorFocused: Boolean = false,
     // Non-empty only in search results — highlights each match in the title/preview.
     highlightQuery: String = "",
+    // The colour the row sits on. Painted behind the row so the swipe-action panel
+    // isn't visible through it — see SwipeActionsRow.
+    surface: Color,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     isTrash: Boolean = false,
@@ -838,6 +858,7 @@ private fun NoteRow(
             onDelete = onDelete,
             isPinned = note.isPinned,
             enabled = !isTrash,
+            surface = surface,
         ) {
         Row(
             modifier = Modifier
