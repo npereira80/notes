@@ -839,11 +839,11 @@ private fun NoteRow(
                 )
             }
         }
-        // The menu is anchored to this zero-size Box, so putting the BOX at the row's
-        // top-end is what opens the menu on the right. (A modifier passed to
-        // DropdownMenu itself styles the popup's content, not its anchor — so
-        // Modifier.align there has no effect on where it appears.)
-        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+        // The menu is anchored to this zero-size Box, so the BOX's placement is what
+        // positions the popup: bottom-end of the row, so the menu opens below the row
+        // and on the right. (A modifier passed to DropdownMenu itself styles the
+        // popup's content, not its anchor — Modifier.align there does nothing.)
+        Box(modifier = Modifier.align(Alignment.BottomEnd)) {
             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                 if (isTrash) {
                     DropdownMenuItem(text = { Text("Restore") }, onClick = {
@@ -916,7 +916,7 @@ private fun TrashedFolderRow(
         }
         // Anchored to a top-end Box so it opens on the right — see the note on the
         // note-row menu above.
-        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+        Box(modifier = Modifier.align(Alignment.BottomEnd)) {
             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                 DropdownMenuItem(text = { Text("Restore") }, onClick = {
                     showMenu = false
