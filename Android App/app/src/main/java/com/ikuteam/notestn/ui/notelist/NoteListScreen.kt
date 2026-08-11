@@ -830,6 +830,7 @@ private fun NoteRow(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmPin by remember { mutableStateOf(false) }
     // produceState on Dispatchers.IO — resourceLocalFile is a synchronous SQLite
     // query, and the old remember(note.id, note.body) ran it on the main thread for
     // every row entering composition (and re-ran it on every keystroke-save of the
@@ -856,9 +857,9 @@ private fun NoteRow(
         // menu below, which still works. Not offered in Trash, where the actions are
         // Restore / Delete Permanently instead.
         SwipeActionsRow(
-            onPin = onTogglePin,
-            // Same confirmation dialog as the long-press menu's "Delete Note" —
-            // deleting shouldn't happen on a gesture alone.
+            // Both swipe actions confirm first — a swipe is easy to trigger by
+            // accident while scrolling, so neither should change the note on its own.
+            onPin = { confirmPin = true },
             onDelete = { confirmDelete = true },
             isPinned = note.isPinned,
             enabled = !isTrash,
@@ -1003,6 +1004,34 @@ private fun NoteRow(
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // Swipe-to-pin confirmation (the long-press menu still pins immediately — a
+    // deliberate tap doesn't need confirming the way a stray swipe does).
+    if (confirmPin) {
+        val pinning = !note.isPinned
+        AlertDialog(
+            onDismissRequest = { confirmPin = false },
+            title = { Text(if (pinning) "Pin Note" else "Unpin Note") },
+            text = {
+                Text(
+                    if (pinning) {
+                        "Pin \"${note.title.ifEmpty { "Untitled" }}\" to the top of the list?"
+                    } else {
+                        "Unpin \"${note.title.ifEmpty { "Untitled" }}\"?"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onTogglePin()
+                    confirmPin = false
+                }) { Text(if (pinning) "Pin" else "Unpin") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPin = false }) { Text("Cancel") }
             },
         )
     }
