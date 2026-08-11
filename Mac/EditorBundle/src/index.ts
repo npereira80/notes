@@ -604,7 +604,11 @@ function createEditor(): EditorView {
       buildInputRules(),
       dropCursor(),
       gapCursor(),
-      columnResizing(),
+      // handleWidth 8 (default 5) gives a wider grab zone for the column resize
+      // handles so they're usable with a finger on Android/iPad, not just a mouse.
+      // lastColumnResizable: false — the table is pinned to 100% width (see the CSS),
+      // so dragging its right edge has nothing to give.
+      columnResizing({ handleWidth: 8, cellMinWidth: 40, lastColumnResizable: false }),
       tableEditing(),
 
       // Open links in default browser on click

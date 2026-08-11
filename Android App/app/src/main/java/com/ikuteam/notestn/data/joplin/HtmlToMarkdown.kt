@@ -51,7 +51,12 @@ object HtmlToMarkdown {
 
             "ol" -> renderOrderedList(el)
 
-            "table" -> renderTable(el)
+            // A manually-resized table (any cell carrying data-colwidth, written by
+            // prosemirror-tables' column resizing) is passed through as raw HTML so its
+            // column widths survive the round-trip — Markdown pipe tables have no way to
+            // express them. Default equal-width tables still emit clean Markdown that
+            // other Joplin clients render natively.
+            "table" -> if (el.selectFirst("[data-colwidth]") != null) el.outerHtml() else renderTable(el)
 
             "details" -> el.outerHtml() // no Markdown equivalent — pass through as raw HTML
 

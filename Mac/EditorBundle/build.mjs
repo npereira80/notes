@@ -507,15 +507,55 @@ function writeEditorHtml(outDir) {
   /* Tables */
   .ProseMirror table {
     border-collapse: collapse;
-    width: 100%;
+    /* table-layout: fixed is what stops columns resizing themselves as you type.
+       With the browser default (auto) each column is sized to its content, so
+       typing in one cell widened that column and squeezed the others. Fixed
+       layout makes the column widths authoritative — equal by default, or
+       whatever a resize drag set — and long text wraps inside the cell, growing
+       the row's height instead of the column's width. */
+    table-layout: fixed;
+    /* !important: prosemirror-tables' TableView writes an inline
+       style.width = <sum of column widths>px once every column has an explicit
+       width, which would let a resized table run past the note's width. Forcing
+       100% keeps the table full-width and makes the browser scale the column
+       widths proportionally, so widening one column shrinks its neighbours. */
+    width: 100% !important;
     font-size: 0.9em;
   }
   .ProseMirror th, .ProseMirror td {
     border: 1px solid var(--color-blockquote);
     padding: 6px 10px;
     text-align: left;
+    /* Anchors the absolutely-positioned column resize handle (and the
+       selected-cell overlay, which already assumed a positioned ancestor). */
+    position: relative;
+    /* Text starts at the top so cells in a row with different amounts of text
+       line up. */
+    vertical-align: top;
+    /* Long unbroken strings (URLs, ids) wrap instead of forcing the column wider. */
+    overflow-wrap: break-word;
+    word-break: break-word;
   }
   .ProseMirror th { background: var(--color-code-bg); font-weight: 600; }
+
+  /* Column resize handle — prosemirror-tables' columnResizing plugin adds
+     .column-resize-handle to the cell whose right edge the pointer is near. The
+     bar itself is thin and pointer-events: none (the plugin tracks the pointer,
+     not this element); the grab zone's width comes from the plugin's handleWidth,
+     set generously in index.ts so it's also usable with a finger. */
+  .ProseMirror .column-resize-handle {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--color-link);
+    pointer-events: none;
+    z-index: 20;
+  }
+  .ProseMirror.resize-cursor {
+    cursor: col-resize;
+  }
   .selectedCell::after {
     z-index: 2;
     position: absolute;

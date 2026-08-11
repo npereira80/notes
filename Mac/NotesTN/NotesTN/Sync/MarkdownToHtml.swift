@@ -39,6 +39,20 @@ enum MarkdownToHtml {
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
                 i += 1
 
+            } else if line.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("<table") {
+                // Raw HTML table passthrough. HtmlToMarkdown emits a manually-resized
+                // table as raw HTML (pipe tables can't express column widths), so it
+                // has to come back unescaped — otherwise escapeHtml would turn it into
+                // literal "&lt;table&gt;" text in the note.
+                var htmlLines: [String] = []
+                while i < lines.count {
+                    htmlLines.append(lines[i])
+                    let closed = lines[i].lowercased().contains("</table>")
+                    i += 1
+                    if closed { break }
+                }
+                html += htmlLines.joined(separator: "\n") + "\n"
+
             } else if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                 var codeLines: [String] = []
                 i += 1
@@ -103,6 +117,7 @@ enum MarkdownToHtml {
                     !matches(headingRegex, lines[i]) && parseListLine(lines[i]) == nil &&
                     !matches(blockquoteRegex, lines[i]) &&
                     !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") &&
+                    !lines[i].trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("<table") &&
                     !matches(hrRegex, lines[i].trimmingCharacters(in: .whitespaces)) &&
                     !isTableStart(lines, i) {
                     paragraphLines.append(lines[i])

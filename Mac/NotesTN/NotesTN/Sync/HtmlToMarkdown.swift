@@ -47,7 +47,12 @@ enum HtmlToMarkdown {
             return renderOrderedList(el)
 
         case "table":
-            return renderTable(el)
+            // A manually-resized table (any cell carrying data-colwidth, written by
+            // prosemirror-tables' column resizing) is passed through as raw HTML so
+            // its column widths survive the round-trip — Markdown pipe tables have no
+            // way to express them. Default equal-width tables still emit clean
+            // Markdown that other Joplin clients render natively.
+            return hasColumnWidths(el) ? serialize(el) : renderTable(el)
 
         case "details":
             return serialize(el) // no Markdown equivalent — pass through as raw HTML
@@ -92,6 +97,17 @@ enum HtmlToMarkdown {
     private static func renderListItemContent(_ host: HtmlNode) -> String {
         let firstBlock = elements(host.children).first(where: { $0.tag == "p" }) ?? host
         return renderInline(firstBlock)
+    }
+
+    /// True if any cell in the table carries an explicit column width — i.e. the user
+    /// resized a column (see prosemirror-tables' data-colwidth). Used to decide
+    /// between raw-HTML passthrough (preserves widths) and a Markdown pipe table.
+    private static func hasColumnWidths(_ table: HtmlNode) -> Bool {
+        func search(_ node: HtmlNode) -> Bool {
+            if let value = node.attributes["data-colwidth"], !value.isEmpty { return true }
+            return node.children.contains(where: search)
+        }
+        return search(table)
     }
 
     private static func renderTable(_ table: HtmlNode) -> String {

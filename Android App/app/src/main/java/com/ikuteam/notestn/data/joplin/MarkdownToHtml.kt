@@ -41,6 +41,21 @@ object MarkdownToHtml {
             when {
                 line.isBlank() -> i++
 
+                // Raw HTML table passthrough. HtmlToMarkdown emits a manually-resized
+                // table as raw HTML (pipe tables can't express column widths), so it has
+                // to come back unescaped — otherwise escapeHtml would turn it into
+                // literal "&lt;table&gt;" text in the note.
+                line.trimStart().startsWith("<table", ignoreCase = true) -> {
+                    val htmlLines = mutableListOf<String>()
+                    while (i < lines.size) {
+                        htmlLines.add(lines[i])
+                        val closed = lines[i].contains("</table>", ignoreCase = true)
+                        i++
+                        if (closed) break
+                    }
+                    html.append(htmlLines.joinToString("\n")).append("\n")
+                }
+
                 line.trimStart().startsWith("```") -> {
                     val codeLines = mutableListOf<String>()
                     i++
@@ -111,6 +126,7 @@ object MarkdownToHtml {
                         !headingRegex.matches(lines[i]) && parseListLine(lines[i]) == null &&
                         !blockquoteRegex.matches(lines[i]) &&
                         !lines[i].trimStart().startsWith("```") && !hrRegex.matches(lines[i].trim()) &&
+                        !lines[i].trimStart().startsWith("<table", ignoreCase = true) &&
                         !isTableStart(lines, i)
                     ) {
                         paragraphLines.add(lines[i])
