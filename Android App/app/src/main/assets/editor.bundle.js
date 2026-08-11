@@ -15373,8 +15373,10 @@
   function buildAutoLinkDecos(doc3) {
     const decos = [];
     doc3.descendants((node, pos) => {
+      if (node.type === schema_default.nodes.code_block) return false;
       if (!node.isText || !node.text) return;
       if (node.marks.some((m) => m.type === schema_default.marks.link)) return;
+      if (node.marks.some((m) => m.type === schema_default.marks.code)) return;
       for (const link of detectLinks(node.text)) {
         decos.push(
           Decoration.inline(pos + link.start, pos + link.end, {

@@ -238,10 +238,15 @@ const autoLinkKey = new PluginKey<DecorationSet>('autoLink');
 function buildAutoLinkDecos(doc: any): DecorationSet {
   const decos: Decoration[] = [];
   doc.descendants((node: any, pos: number) => {
+    // Never auto-link inside a code block — a snippet's URLs stay plain text.
+    // Returning false skips descending into the block's text children entirely.
+    if (node.type === schema.nodes.code_block) return false;
     if (!node.isText || !node.text) return;
     // Skip text that's already an explicit link (<a> via the link mark) — those are
     // handled by the existing link click handler and shouldn't be double-detected.
     if (node.marks.some((m: any) => m.type === schema.marks.link)) return;
+    // Skip inline code (`...`) too — code spans should stay plain text, not links.
+    if (node.marks.some((m: any) => m.type === schema.marks.code)) return;
     for (const link of detectLinks(node.text)) {
       decos.push(
         Decoration.inline(pos + link.start, pos + link.end, {
