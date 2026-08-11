@@ -603,8 +603,10 @@ private fun EditorToolbar(
         ToolbarToggleButton(Icons.Outlined.FormatItalic, "Italic", s.italic) { coordinator.execCommand("italic") }
         ToolbarToggleButton(Icons.Filled.FormatStrikethrough, "Strikethrough", s.strikethrough) { coordinator.execCommand("strikethrough") }
         ToolbarToggleButton(Icons.Filled.BorderColor, "Highlight", s.highlight) { coordinator.execCommand("highlight") }
-        // Code block (the box). Inline code ("Monospaced") is still in the text style menu.
-        ToolbarToggleButton(Icons.Filled.Code, "Code Block", s.inCode) { coordinator.execCommand("codeBlock") }
+        // Code: a partial selection inside a line becomes inline code, a whole paragraph
+        // (or several) becomes a code block — see setCodeBlock in EditorBundle's
+        // commands.ts. Active for either kind.
+        ToolbarToggleButton(Icons.Filled.Code, "Code", s.inCode || s.code) { coordinator.execCommand("codeBlock") }
 
         ToolbarDivider()
         ToolbarToggleButton(Icons.Filled.FormatListBulleted, "Bullet List", s.inBulletList) { coordinator.execCommand("bulletList") }

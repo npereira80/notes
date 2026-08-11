@@ -14790,9 +14790,14 @@
   var setHeading = (view, level) => setBlockType2(schema_default.nodes.heading, { level: level ?? 1 })(view.state, view.dispatch, view);
   var setCodeBlock = (view) => {
     const { state, dispatch } = view;
-    const { $from, $to } = state.selection;
+    const { $from, $to, empty: empty2 } = state.selection;
     if ($from.parent.type === schema_default.nodes.code_block) {
       return setBlockType2(schema_default.nodes.paragraph)(state, dispatch, view);
+    }
+    const withinOneBlock = $from.sameParent($to);
+    const coversWholeBlock = $from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size;
+    if (!empty2 && withinOneBlock && !coversWholeBlock) {
+      return toggleMark(schema_default.marks.code)(state, dispatch, view);
     }
     const lines = [];
     state.doc.nodesBetween(state.selection.from, state.selection.to, (node) => {
@@ -15491,6 +15496,47 @@
     }
     return false;
   }
+  var arrowDownOutOfCodeBlock = (state, dispatch) => {
+    const { $head, empty: empty2 } = state.selection;
+    if (!empty2 || $head.parent.type !== schema_default.nodes.code_block) return false;
+    if ($head.parentOffset !== $head.parent.content.size) return false;
+    const after = $head.after($head.depth);
+    if (state.doc.nodeAt(after)) return false;
+    if (dispatch) {
+      const tr = state.tr.insert(after, schema_default.nodes.paragraph.create());
+      tr.setSelection(Selection.near(tr.doc.resolve(after + 1)));
+      dispatch(tr.scrollIntoView());
+    }
+    return true;
+  };
+  function clickBelowToEscape() {
+    const trapping = [schema_default.nodes.code_block, schema_default.nodes.table];
+    const escapeBelow = (view, clientY) => {
+      var _a;
+      if (!view.editable) return false;
+      const last = view.state.doc.lastChild;
+      if (!last || !trapping.includes(last.type)) return false;
+      const lastPos = view.state.doc.content.size - last.nodeSize;
+      const dom = view.nodeDOM(lastPos);
+      const rect = (_a = dom == null ? void 0 : dom.getBoundingClientRect) == null ? void 0 : _a.call(dom);
+      if (!rect || clientY <= rect.bottom) return false;
+      const tr = view.state.tr.insert(view.state.doc.content.size, schema_default.nodes.paragraph.create());
+      tr.setSelection(Selection.near(tr.doc.resolve(tr.doc.content.size - 1)));
+      view.dispatch(tr.scrollIntoView());
+      return true;
+    };
+    return new Plugin({
+      props: {
+        handleDOMEvents: {
+          mousedown: (view, event) => escapeBelow(view, event.clientY),
+          touchend: (view, event) => {
+            const touch = event.changedTouches[0];
+            return touch ? escapeBelow(view, touch.clientY) : false;
+          }
+        }
+      }
+    });
+  }
   function buildKeymap() {
     const { list_item, task_list_item } = schema_default.nodes;
     const listItemTypes = [list_item, task_list_item];
@@ -15504,6 +15550,8 @@
       // List indentation
       "Tab": (state, dispatch, view) => commands.indent(view),
       "Shift-Tab": (state, dispatch, view) => commands.outdent(view),
+      // Escape a code block that ends the note (see arrowDownOutOfCodeBlock).
+      "ArrowDown": arrowDownOutOfCodeBlock,
       // Enter in list items (title-to-body handoff checked first)
       "Enter": chainCommands(
         moveFromTitleToBody,
@@ -15656,6 +15704,8 @@
         // claim the drag gesture.
         percentColumnResizing(),
         tableEditing(),
+        // Lets a click/tap below a trailing code block or table escape it.
+        clickBelowToEscape(),
         // Open links in default browser on click
         new Plugin({
           props: {

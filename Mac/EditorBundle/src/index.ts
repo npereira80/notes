@@ -715,6 +715,60 @@ function isFirstListItem(state: EditorState): boolean {
   return false;
 }
 
+// ArrowDown at the end of a code block that has nothing after it creates a paragraph
+// below and moves the cursor there — otherwise a code block at the end of a note
+// traps the cursor with no way to write normal text again. (The trailingParagraph
+// plugin below usually keeps such a paragraph around already; this covers the moment
+// before it lands and matches what people expect from the arrow key.)
+const arrowDownOutOfCodeBlock = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+  const { $head, empty } = state.selection;
+  if (!empty || $head.parent.type !== schema.nodes.code_block) return false;
+  if ($head.parentOffset !== $head.parent.content.size) return false; // not at the end
+  const after = $head.after($head.depth);
+  if (state.doc.nodeAt(after)) return false; // something follows — let the arrow move there
+  if (dispatch) {
+    const tr = state.tr.insert(after, schema.nodes.paragraph.create());
+    tr.setSelection(Selection.near(tr.doc.resolve(after + 1)));
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+};
+
+/// Clicking (or tapping) in the empty space below a note that ends in a "box" —
+/// a code block or a table — adds a paragraph after it and puts the cursor there.
+/// Without this the cursor is stuck inside the box with no way to write normal text
+/// again. Done on demand rather than by always keeping a trailing paragraph around,
+/// so simply opening a note never edits it.
+function clickBelowToEscape() {
+  const trapping = [schema.nodes.code_block, schema.nodes.table];
+
+  const escapeBelow = (view: EditorView, clientY: number): boolean => {
+    if (!view.editable) return false;
+    const last = view.state.doc.lastChild;
+    if (!last || !trapping.includes(last.type)) return false;
+    const lastPos = view.state.doc.content.size - last.nodeSize;
+    const dom = view.nodeDOM(lastPos) as HTMLElement | null;
+    const rect = dom?.getBoundingClientRect?.();
+    if (!rect || clientY <= rect.bottom) return false; // not below the box
+    const tr = view.state.tr.insert(view.state.doc.content.size, schema.nodes.paragraph.create());
+    tr.setSelection(Selection.near(tr.doc.resolve(tr.doc.content.size - 1)));
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  };
+
+  return new Plugin({
+    props: {
+      handleDOMEvents: {
+        mousedown: (view, event) => escapeBelow(view, (event as MouseEvent).clientY),
+        touchend: (view, event) => {
+          const touch = (event as TouchEvent).changedTouches[0];
+          return touch ? escapeBelow(view, touch.clientY) : false;
+        },
+      },
+    },
+  });
+}
+
 function buildKeymap() {
   const { list_item, task_list_item } = schema.nodes;
   const listItemTypes = [list_item, task_list_item];
@@ -730,6 +784,9 @@ function buildKeymap() {
     // List indentation
     'Tab': (state, dispatch, view) => commands.indent(view!),
     'Shift-Tab': (state, dispatch, view) => commands.outdent(view!),
+
+    // Escape a code block that ends the note (see arrowDownOutOfCodeBlock).
+    'ArrowDown': arrowDownOutOfCodeBlock,
 
     // Enter in list items (title-to-body handoff checked first)
     'Enter': chainCommands(
@@ -920,6 +977,9 @@ function createEditor(): EditorView {
       // claim the drag gesture.
       percentColumnResizing(),
       tableEditing(),
+
+      // Lets a click/tap below a trailing code block or table escape it.
+      clickBelowToEscape(),
 
       // Open links in default browser on click
       new Plugin({

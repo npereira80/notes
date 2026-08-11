@@ -947,9 +947,10 @@ struct EditorToolbarView: View {
             FormatToggleButton(icon: "highlighter", isActive: coordinator.selectionState.highlight) {
                 coordinator.execCommand("highlight")
             }
-            // Code block (the box). Inline code ("Monospaced") is still in the text
-            // style menu.
-            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", isActive: coordinator.selectionState.inCode) {
+            // Code: a partial selection inside a line becomes inline code, a whole
+            // paragraph (or several) becomes a code block — see setCodeBlock in
+            // EditorBundle/src/commands.ts. Active for either kind.
+            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", isActive: coordinator.selectionState.inCode || coordinator.selectionState.code) {
                 coordinator.execCommand("codeBlock")
             }
 

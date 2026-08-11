@@ -76,11 +76,21 @@ const setHeading: CommandFn = (view, level?: number) =>
 // is exactly what's wanted when converting inline-code lines into a real block.
 const setCodeBlock: CommandFn = (view) => {
   const { state, dispatch } = view;
-  const { $from, $to } = state.selection;
+  const { $from, $to, empty } = state.selection;
 
   // Already a code block → back to a paragraph.
   if ($from.parent.type === schema.nodes.code_block) {
     return setBlockType(schema.nodes.paragraph)(state, dispatch, view);
+  }
+
+  // A partial selection inside one paragraph means "code this bit of the sentence",
+  // not "make the whole paragraph a box" — apply the inline code mark instead (and
+  // toggle it back off if it's already code).
+  const withinOneBlock = $from.sameParent($to);
+  const coversWholeBlock =
+    $from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size;
+  if (!empty && withinOneBlock && !coversWholeBlock) {
+    return toggleMark(schema.marks.code)(state, dispatch, view);
   }
 
   // Collect the text of every text block the selection touches.
