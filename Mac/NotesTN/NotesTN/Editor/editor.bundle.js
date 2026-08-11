@@ -15394,6 +15394,118 @@
     });
     return DecorationSet.create(doc3, decos);
   }
+  var TOUCH_HANDLE_WIDTH = 16;
+  var TOUCH_CELL_MIN_WIDTH = 40;
+  function touchEdgeCell(view, clientX, clientY) {
+    const found2 = view.posAtCoords({ left: clientX - TOUCH_HANDLE_WIDTH, top: clientY });
+    if (!found2) return -1;
+    const $cell = cellAround(view.state.doc.resolve(found2.pos));
+    return $cell ? $cell.pos : -1;
+  }
+  function touchCurrentColWidth(view, cellPos) {
+    const cell = view.state.doc.nodeAt(cellPos);
+    const colwidth = cell == null ? void 0 : cell.attrs.colwidth;
+    const explicit = colwidth && colwidth[colwidth.length - 1];
+    if (explicit) return explicit;
+    const dom = view.domAtPos(cellPos);
+    const el = dom.node.childNodes[dom.offset];
+    return (el == null ? void 0 : el.offsetWidth) ?? TOUCH_CELL_MIN_WIDTH;
+  }
+  function touchPreviewWidth(view, cellPos, width) {
+    const $cell = view.state.doc.resolve(cellPos);
+    const table = $cell.node(-1);
+    const start = $cell.start(-1);
+    const col = TableMap.get(table).colCount($cell.pos - start) + $cell.nodeAfter.attrs.colspan - 1;
+    let dom = view.domAtPos(start).node;
+    while (dom && dom.nodeName !== "TABLE") dom = dom.parentNode;
+    if (!dom) return;
+    updateColumnsOnResize(table, dom.firstChild, dom, TOUCH_CELL_MIN_WIDTH, col, width);
+  }
+  function touchCommitWidth(view, cellPos, width) {
+    const $cell = view.state.doc.resolve(cellPos);
+    const table = $cell.node(-1);
+    const map2 = TableMap.get(table);
+    const start = $cell.start(-1);
+    const col = map2.colCount($cell.pos - start) + $cell.nodeAfter.attrs.colspan - 1;
+    const tr = view.state.tr;
+    for (let row = 0; row < map2.height; row++) {
+      const mapIndex = row * map2.width + col;
+      if (row && map2.map[mapIndex] === map2.map[mapIndex - map2.width]) continue;
+      const pos = map2.map[mapIndex];
+      const attrs = table.nodeAt(pos).attrs;
+      const index = attrs.colspan === 1 ? 0 : col - map2.colCount(pos);
+      if (attrs.colwidth && attrs.colwidth[index] === width) continue;
+      const colwidth = attrs.colwidth ? attrs.colwidth.slice() : Array(attrs.colspan).fill(0);
+      colwidth[index] = width;
+      tr.setNodeMarkup(start + pos, null, { ...attrs, colwidth });
+    }
+    if (tr.docChanged) view.dispatch(tr);
+  }
+  var TOUCH_DRAG_THRESHOLD = 4;
+  function touchColumnResizing() {
+    let candidateCell = -1;
+    let dragging = false;
+    let startX = 0;
+    let startWidth = 0;
+    const reset = () => {
+      candidateCell = -1;
+      dragging = false;
+    };
+    return new Plugin({
+      props: {
+        handleDOMEvents: {
+          touchstart(view, event) {
+            if (!view.editable) return false;
+            const touch = event.touches[0];
+            if (!touch) return false;
+            const cellPos = touchEdgeCell(view, touch.clientX, touch.clientY);
+            if (cellPos < 0) return false;
+            candidateCell = cellPos;
+            dragging = false;
+            startX = touch.clientX;
+            startWidth = touchCurrentColWidth(view, cellPos);
+            return false;
+          },
+          touchmove(view, event) {
+            if (candidateCell < 0) return false;
+            const touch = event.touches[0];
+            if (!touch) return false;
+            const dx = touch.clientX - startX;
+            if (!dragging) {
+              if (Math.abs(dx) < TOUCH_DRAG_THRESHOLD) return false;
+              dragging = true;
+              view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: candidateCell }));
+            }
+            touchPreviewWidth(view, candidateCell, Math.max(TOUCH_CELL_MIN_WIDTH, startWidth + dx));
+            event.preventDefault();
+            return true;
+          },
+          touchend(view, event) {
+            if (candidateCell < 0) return false;
+            if (!dragging) {
+              reset();
+              return false;
+            }
+            const touch = event.changedTouches[0];
+            const width = touch ? Math.max(TOUCH_CELL_MIN_WIDTH, startWidth + (touch.clientX - startX)) : startWidth;
+            touchCommitWidth(view, candidateCell, width);
+            view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: -1 }));
+            reset();
+            return true;
+          },
+          touchcancel(view) {
+            if (candidateCell < 0) return false;
+            const wasDragging = dragging;
+            if (wasDragging) {
+              view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: -1 }));
+            }
+            reset();
+            return wasDragging;
+          }
+        }
+      }
+    });
+  }
   var findKey = new PluginKey("find");
   function collectDocText(doc3) {
     let text = "";
@@ -15650,6 +15762,9 @@
         // lastColumnResizable: false — the table is pinned to 100% width (see the CSS),
         // so dragging its right edge has nothing to give.
         columnResizing({ handleWidth: 8, cellMinWidth: 40, lastColumnResizable: false }),
+        // Touch half of column resizing (Android/iPad) — must come BEFORE tableEditing,
+        // whose own touch/selection handling would otherwise claim the gesture.
+        touchColumnResizing(),
         tableEditing(),
         // Open links in default browser on click
         new Plugin({

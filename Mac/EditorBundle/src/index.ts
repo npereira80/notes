@@ -17,7 +17,10 @@ import { baseKeymap, chainCommands, exitCode, newlineInCode } from 'prosemirror-
 import { splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list';
 import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
-import { tableEditing, columnResizing } from 'prosemirror-tables';
+import {
+  tableEditing, columnResizing, columnResizingPluginKey,
+  updateColumnsOnResize, TableMap, cellAround,
+} from 'prosemirror-tables';
 import { inputRules, wrappingInputRule, textblockTypeInputRule, smartQuotes, emDash, ellipsis, InputRule } from 'prosemirror-inputrules';
 
 import schema from './schema';
@@ -258,6 +261,157 @@ function buildAutoLinkDecos(doc: any): DecorationSet {
     }
   });
   return DecorationSet.create(doc, decos);
+}
+
+// ── Touch column resizing (tables) ─────────────────────────────────────────────
+//
+// prosemirror-tables' columnResizing plugin is mouse-only: it drives the drag from
+// mousedown + a window mousemove listener. Touch devices don't produce that stream
+// (a browser only synthesizes a click after touchend), so on Android/iPad tapping a
+// column edge showed the handle but dragging did nothing. This plugin adds the touch
+// half, reusing the same plugin state and the library's own exported helpers so the
+// behavior and the committed document are identical to the mouse path.
+
+const TOUCH_HANDLE_WIDTH = 16; // generous grab zone for a fingertip
+const TOUCH_CELL_MIN_WIDTH = 40; // keep in sync with columnResizing's cellMinWidth
+
+/// Document position of the cell whose RIGHT edge is within the grab zone of the
+/// given viewport x/y, or -1. Mirrors the library's internal edgeCell(side: 'right').
+function touchEdgeCell(view: EditorView, clientX: number, clientY: number): number {
+  const found = view.posAtCoords({ left: clientX - TOUCH_HANDLE_WIDTH, top: clientY });
+  if (!found) return -1;
+  const $cell = cellAround(view.state.doc.resolve(found.pos));
+  return $cell ? $cell.pos : -1;
+}
+
+/// Current rendered width of the column the given cell belongs to.
+function touchCurrentColWidth(view: EditorView, cellPos: number): number {
+  const cell = view.state.doc.nodeAt(cellPos);
+  const colwidth = cell?.attrs.colwidth;
+  const explicit = colwidth && colwidth[colwidth.length - 1];
+  if (explicit) return explicit;
+  const dom = view.domAtPos(cellPos);
+  const el = dom.node.childNodes[dom.offset] as HTMLElement | undefined;
+  return el?.offsetWidth ?? TOUCH_CELL_MIN_WIDTH;
+}
+
+/// Live preview while dragging — repaints the table's colgroup without touching the
+/// document (same approach as the library's displayColumnWidth).
+function touchPreviewWidth(view: EditorView, cellPos: number, width: number) {
+  const $cell = view.state.doc.resolve(cellPos);
+  const table = $cell.node(-1);
+  const start = $cell.start(-1);
+  const col = TableMap.get(table).colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
+  let dom: any = view.domAtPos(start).node;
+  while (dom && dom.nodeName !== 'TABLE') dom = dom.parentNode;
+  if (!dom) return;
+  updateColumnsOnResize(table, dom.firstChild, dom, TOUCH_CELL_MIN_WIDTH, col, width);
+}
+
+/// Commits the dragged width to every cell in the column (mirrors the library's
+/// internal updateColumnWidth, which isn't exported).
+function touchCommitWidth(view: EditorView, cellPos: number, width: number) {
+  const $cell = view.state.doc.resolve(cellPos);
+  const table = $cell.node(-1);
+  const map = TableMap.get(table);
+  const start = $cell.start(-1);
+  const col = map.colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
+  const tr = view.state.tr;
+  for (let row = 0; row < map.height; row++) {
+    const mapIndex = row * map.width + col;
+    // Skip a cell already handled by the row above (rowspan).
+    if (row && map.map[mapIndex] === map.map[mapIndex - map.width]) continue;
+    const pos = map.map[mapIndex];
+    const attrs = table.nodeAt(pos)!.attrs;
+    const index = attrs.colspan === 1 ? 0 : col - map.colCount(pos);
+    if (attrs.colwidth && attrs.colwidth[index] === width) continue;
+    const colwidth = attrs.colwidth ? attrs.colwidth.slice() : Array(attrs.colspan).fill(0);
+    colwidth[index] = width;
+    tr.setNodeMarkup(start + pos, null, { ...attrs, colwidth });
+  }
+  if (tr.docChanged) view.dispatch(tr);
+}
+
+/// Px of horizontal movement before a touch near a column edge counts as a resize
+/// drag rather than a tap. Without this, tapping near an edge to place the cursor
+/// would be swallowed AND would commit an explicit width to the column (which also
+/// flips the table to raw-HTML syncing — see HtmlToMarkdown).
+const TOUCH_DRAG_THRESHOLD = 4;
+
+function touchColumnResizing() {
+  // Drag bookkeeping lives outside plugin state: the gesture is transient and we
+  // only want one document transaction, committed at touchend.
+  let candidateCell = -1;   // edge touched, not yet moved enough to be a drag
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  const reset = () => {
+    candidateCell = -1;
+    dragging = false;
+  };
+
+  return new Plugin({
+    props: {
+      handleDOMEvents: {
+        touchstart(view, event) {
+          if (!view.editable) return false;
+          const touch = (event as TouchEvent).touches[0];
+          if (!touch) return false;
+          const cellPos = touchEdgeCell(view, touch.clientX, touch.clientY);
+          if (cellPos < 0) return false;
+          // Only remember the candidate here — the tap still behaves normally
+          // (cursor placement) unless the finger actually moves sideways.
+          candidateCell = cellPos;
+          dragging = false;
+          startX = touch.clientX;
+          startWidth = touchCurrentColWidth(view, cellPos);
+          return false;
+        },
+        touchmove(view, event) {
+          if (candidateCell < 0) return false;
+          const touch = (event as TouchEvent).touches[0];
+          if (!touch) return false;
+          const dx = touch.clientX - startX;
+          if (!dragging) {
+            if (Math.abs(dx) < TOUCH_DRAG_THRESHOLD) return false;
+            dragging = true;
+            // Show the handle on the column being dragged, matching the mouse path.
+            view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: candidateCell }));
+          }
+          touchPreviewWidth(view, candidateCell, Math.max(TOUCH_CELL_MIN_WIDTH, startWidth + dx));
+          // Stops the WebView scrolling / selecting text mid-drag.
+          event.preventDefault();
+          return true;
+        },
+        touchend(view, event) {
+          if (candidateCell < 0) return false;
+          if (!dragging) {
+            // A plain tap near the edge — leave it to the normal handlers.
+            reset();
+            return false;
+          }
+          const touch = (event as TouchEvent).changedTouches[0];
+          const width = touch
+            ? Math.max(TOUCH_CELL_MIN_WIDTH, startWidth + (touch.clientX - startX))
+            : startWidth;
+          touchCommitWidth(view, candidateCell, width);
+          view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: -1 }));
+          reset();
+          return true;
+        },
+        touchcancel(view) {
+          if (candidateCell < 0) return false;
+          const wasDragging = dragging;
+          if (wasDragging) {
+            view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: -1 }));
+          }
+          reset();
+          return wasDragging;
+        },
+      },
+    },
+  });
 }
 
 // ── Find in note (in-editor search + highlight) ────────────────────────────────
@@ -609,6 +763,9 @@ function createEditor(): EditorView {
       // lastColumnResizable: false — the table is pinned to 100% width (see the CSS),
       // so dragging its right edge has nothing to give.
       columnResizing({ handleWidth: 8, cellMinWidth: 40, lastColumnResizable: false }),
+      // Touch half of column resizing (Android/iPad) — must come BEFORE tableEditing,
+      // whose own touch/selection handling would otherwise claim the gesture.
+      touchColumnResizing(),
       tableEditing(),
 
       // Open links in default browser on click
