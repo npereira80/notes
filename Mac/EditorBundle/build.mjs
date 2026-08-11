@@ -77,6 +77,9 @@ function writeEditorHtml(outDir) {
     --color-secondary: #666;
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
+    /* Heading collapse chevron's square background, and its hover state. */
+    --color-chevron-bg: rgba(0, 0, 0, 0.06);
+    --color-chevron-bg-hover: rgba(0, 0, 0, 0.12);
     /* Inline code text. A deep burnt orange on the light chip (#F0F0F0) —
        6.1:1, well past the 4.5:1 AA threshold. Dark mode needs a much lighter
        orange to stay readable (a dark orange there is only ~2.6:1, unreadable),
@@ -112,6 +115,8 @@ function writeEditorHtml(outDir) {
       --color-secondary: #aaa;
       --color-selection: #faebc3;
       --color-code-bg: rgba(255, 255, 255, 0.08);
+      --color-chevron-bg: rgba(255, 255, 255, 0.08);
+      --color-chevron-bg-hover: rgba(255, 255, 255, 0.16);
       /* Light orange: on the dark chip (#303030) this is 6.8:1. */
       --color-inline-code-text: #ffa657;
       --color-blockquote: #777;
@@ -135,6 +140,8 @@ function writeEditorHtml(outDir) {
     --color-secondary: #aaa;
     --color-selection: #faebc3;
     --color-code-bg: rgba(255, 255, 255, 0.08);
+    --color-chevron-bg: rgba(255, 255, 255, 0.08);
+    --color-chevron-bg-hover: rgba(255, 255, 255, 0.16);
     /* Light orange: on the dark chip (#303030) this is 6.8:1. */
     --color-inline-code-text: #ffa657;
     --color-blockquote: #777;
@@ -149,6 +156,8 @@ function writeEditorHtml(outDir) {
     --color-secondary: #666;
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
+    --color-chevron-bg: rgba(0, 0, 0, 0.06);
+    --color-chevron-bg-hover: rgba(0, 0, 0, 0.12);
     --color-inline-code-text: #a03500;
     --color-blockquote: #999;
     --color-link: #f9b524;
@@ -172,7 +181,10 @@ function writeEditorHtml(outDir) {
     min-height: 100%;
     background: var(--color-bg);
     color: var(--color-text);
-    padding: var(--native-toolbar-inset) 24px 48px 24px;
+    /* 32px on the left, 8 more than the right: the heading collapse chevron's
+       square sits out in that padding (see .pm-heading-arrow) and needs the
+       room. Text lines up at the same place on every line, chevron or not. */
+    padding: var(--native-toolbar-inset) 24px 48px 32px;
     font-family: var(--font-body);
     font-size: 16px;
     line-height: 1.7;
@@ -192,10 +204,11 @@ function writeEditorHtml(outDir) {
   }
 
   /* iPhone only (see index.ts's ?platform=ios-phone detection) — the default
-     0 24px 48px 30px is sized for Mac's much wider window; on iPhone's narrow
-     screen it left too large a gap from the edge. iPad keeps the default. */
+     right padding is sized for Mac's much wider window and left too large a gap
+     on iPhone's narrow screen. The left keeps the default 32px, which the
+     heading chevron's square needs. iPad keeps the default throughout. */
   body.pm-ios-phone {
-    padding: 0 12px 48px 24px;
+    padding: 0 12px 48px 32px;
   }
 
   /* ProseMirror container */
@@ -471,31 +484,33 @@ function writeEditorHtml(outDir) {
     margin-top: 0.5rem;
   }
   /* The arrow is pulled out of flow into the body's left padding (see the
-     body rule's "padding: 0 24px 48px") so the heading text lines up with
-     paragraph text instead of being pushed right by an inline arrow. */
+     body rule's padding-left) so the heading text lines up with paragraph text
+     instead of being pushed right by an inline arrow. */
   .ProseMirror .pm-heading-arrow {
     position: absolute;
-    left: -22px;
+    /* Square, and sized in em so it stays in proportion at every heading level.
+       0.9em of the largest heading (h2, 24px) is ~22px, which is why the body
+       needs 32px of left padding: 22 for the square, 6 for the gap to the text,
+       and 4 left over so it isn't flush against the window edge. */
+    width: 0.9em;
+    height: 0.9em;
+    left: calc(-0.9em - 6px);
     top: 50%;
-    /* Widened from 18px so the arrow's right edge reaches the heading/body
-       text's left edge (0), closing the 4px gap that used to sit between them —
-       left stays at -22px (chevron position unchanged) and the text's own
-       position is untouched. */
-    width: 22px;
-    height: 18px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: 4px;
+    background: var(--color-chevron-bg);
     color: var(--color-secondary);
     font-size: 1em;
     font-weight: normal;
     /* Hidden unless the cursor is in this heading (see the pm-heading-focused
        decoration in index.ts) or the pointer is over it — collapsed or not. */
     opacity: 0;
-    transform: translateY(-50%) rotate(90deg); /* expanded: chevron points down */
-    transition: transform 0.15s ease;
+    /* No rotation here: collapsing rotates the chevron glyph (::after) alone, so
+       the gray square stays put instead of swinging with it. */
+    transform: translateY(-50%);
     user-select: none;
   }
   .ProseMirror .pm-heading-focused .pm-heading-arrow {
@@ -514,15 +529,22 @@ function writeEditorHtml(outDir) {
       opacity: 1;
     }
   }
-  .ProseMirror .pm-heading-arrow::after { content: '›'; }
-  .ProseMirror .pm-heading-arrow:hover { background: var(--color-code-bg); }
+  /* The glyph is what rotates — see the transform note on .pm-heading-arrow. */
+  .ProseMirror .pm-heading-arrow::after {
+    content: '›';
+    display: block;
+    line-height: 1;
+    transform: rotate(90deg); /* expanded: chevron points down */
+    transition: transform 0.15s ease;
+  }
+  .ProseMirror .pm-heading-arrow:hover { background: var(--color-chevron-bg-hover); }
   /* Collapsed: chevron points right (h1/"Title" has no arrow at all — see
      schema.ts's heading toDOM) */
-  .ProseMirror h2[data-collapsed] .pm-heading-arrow,
-  .ProseMirror h3[data-collapsed] .pm-heading-arrow,
-  .ProseMirror h4[data-collapsed] .pm-heading-arrow,
-  .ProseMirror h5[data-collapsed] .pm-heading-arrow,
-  .ProseMirror h6[data-collapsed] .pm-heading-arrow { transform: translateY(-50%) rotate(0deg); }
+  .ProseMirror h2[data-collapsed] .pm-heading-arrow::after,
+  .ProseMirror h3[data-collapsed] .pm-heading-arrow::after,
+  .ProseMirror h4[data-collapsed] .pm-heading-arrow::after,
+  .ProseMirror h5[data-collapsed] .pm-heading-arrow::after,
+  .ProseMirror h6[data-collapsed] .pm-heading-arrow::after { transform: rotate(0deg); }
   /* Blocks hidden by a collapsed heading */
   .pm-heading-section-hidden { display: none; }
 
