@@ -16,7 +16,18 @@ enum MarkdownToHtml {
     // Same gap as highlight above — HtmlToMarkdown.swift's "s"/"del"/"strike" case already
     // emits ~~text~~ on save; this was the missing return path for the load side.
     private static let strikethroughRegex = try! NSRegularExpression(pattern: "~~(.+?)~~")
-    private static let italicRegex = try! NSRegularExpression(pattern: "(?<!\\*)\\*(?!\\*)(.+?)\\*(?!\\*)|(?<!_)_(?!_)(.+?)_(?!_)")
+    // Underscore emphasis only counts at a word boundary, per CommonMark: an
+    // underscore inside a word is literal, so "hello_here_stuff" and "snake_case_name"
+    // stay as typed instead of turning "_here_" into italics. Asterisks keep working
+    // mid-word ("foo*bar*baz"), which CommonMark also allows.
+    private static let italicRegex = try! NSRegularExpression(
+        pattern: "(?<!\\*)\\*(?!\\*)(.+?)\\*(?!\\*)|(?<![A-Za-z0-9_])_(.+?)_(?![A-Za-z0-9_])"
+    )
+
+    // Undoes HtmlToMarkdown.escapeMarkdown. Our own notes write a literal underscore
+    // as "\_" so other Markdown renderers don't italicize it; without this the
+    // backslashes would show up as text when the note is read back.
+    private static let unescapeRegex = try! NSRegularExpression(pattern: #"\\([\\*_`\[\]])"#)
     private static let inlineCodeRegex = try! NSRegularExpression(pattern: "`([^`]+)`")
     private static let imageRegex = try! NSRegularExpression(pattern: "!\\[([^\\]]*)\\]\\(([^)]+)\\)")
     private static let linkRegex = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\(([^)]+)\\)")
@@ -261,6 +272,10 @@ enum MarkdownToHtml {
         result = replaceAll(strikethroughRegex, result) { g in "<s>\(g[0])</s>" }
         result = replaceAll(italicRegex, result) { g in "<em>\(g[0].isEmpty ? g[1] : g[0])</em>" }
         result = replaceAll(inlineCodeRegex, result) { g in "<code>\(g[0])</code>" }
+        // Last: turn "\_" back into "_" and so on. Must run after the emphasis passes
+        // above, otherwise an escaped "\*" would be unescaped to "*" and then wrongly
+        // parsed as emphasis.
+        result = replaceAll(unescapeRegex, result) { g in g[0] }
         return result
     }
 

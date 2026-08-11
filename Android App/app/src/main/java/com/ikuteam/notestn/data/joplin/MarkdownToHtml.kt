@@ -16,7 +16,16 @@ object MarkdownToHtml {
     // Same gap as highlight above — HtmlToMarkdown.kt's "s"/"del"/"strike" case already
     // emits ~~text~~ on save; this was the missing return path for the load side.
     private val strikethroughRegex = Regex("~~(.+?)~~")
-    private val italicRegex = Regex("(?<!\\*)\\*(?!\\*)(.+?)\\*(?!\\*)|(?<!_)_(?!_)(.+?)_(?!_)")
+    // Underscore emphasis only counts at a word boundary, per CommonMark: an
+    // underscore inside a word is literal, so "hello_here_stuff" and "snake_case_name"
+    // stay as typed instead of turning "_here_" into italics. Asterisks keep working
+    // mid-word ("foo*bar*baz"), which CommonMark also allows.
+    private val italicRegex = Regex("(?<!\\*)\\*(?!\\*)(.+?)\\*(?!\\*)|(?<![A-Za-z0-9_])_(.+?)_(?![A-Za-z0-9_])")
+
+    // Undoes HtmlToMarkdown.escapeMarkdown. Our own notes write a literal underscore
+    // as "\_" so other Markdown renderers don't italicize it; without this the
+    // backslashes would show up as text when the note is read back.
+    private val unescapeRegex = Regex("""\\([\\*_`\[\]])""")
     private val inlineCodeRegex = Regex("`([^`]+)`")
     private val imageRegex = Regex("!\\[([^\\]]*)]\\(([^)]+)\\)")
     private val linkRegex = Regex("\\[([^\\]]+)]\\(([^)]+)\\)")
@@ -263,6 +272,10 @@ object MarkdownToHtml {
         result = strikethroughRegex.replace(result) { m -> "<s>${m.groupValues[1]}</s>" }
         result = italicRegex.replace(result) { m -> "<em>${m.groupValues[1].ifEmpty { m.groupValues[2] }}</em>" }
         result = inlineCodeRegex.replace(result) { m -> "<code>${m.groupValues[1]}</code>" }
+        // Last: turn "\_" back into "_" and so on. Must run after the emphasis passes
+        // above, otherwise an escaped "\*" would be unescaped to "*" and then wrongly
+        // parsed as emphasis.
+        result = unescapeRegex.replace(result) { m -> m.groupValues[1] }
         return result
     }
 
