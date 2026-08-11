@@ -751,12 +751,14 @@ private fun SwipeActionsRow(
                     onPin()
                     false
                 }
-                // Delete: returning true dismisses the row, so it animates fully off
-                // screen the way SwipeToDismissBox does by default. The note is then
-                // gone from the list (it moved to Trash), so the row is disposed.
+                // Delete: ask first, same confirmation as the long-press menu's
+                // "Delete Note". Returning false settles the row back rather than
+                // dismissing it — the outcome isn't known yet, and cancelling the
+                // dialog would otherwise leave the row stuck off screen. On confirm
+                // the note moves to Trash and the row leaves the list on its own.
                 SwipeToDismissBoxValue.EndToStart -> {
                     onDelete()
-                    true
+                    false
                 }
                 SwipeToDismissBoxValue.Settled -> false
             }
@@ -855,7 +857,9 @@ private fun NoteRow(
         // Restore / Delete Permanently instead.
         SwipeActionsRow(
             onPin = onTogglePin,
-            onDelete = onDelete,
+            // Same confirmation dialog as the long-press menu's "Delete Note" —
+            // deleting shouldn't happen on a gesture alone.
+            onDelete = { confirmDelete = true },
             isPinned = note.isPinned,
             enabled = !isTrash,
             surface = surface,
