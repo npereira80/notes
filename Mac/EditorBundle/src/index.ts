@@ -280,7 +280,12 @@ const EDGE_ZONE_MOUSE = 10;      // px either side of a boundary that grabs it
 const EDGE_ZONE_TOUCH = 16;      // wider for a fingertip
 const TOUCH_DRAG_THRESHOLD = 4;  // px of movement before a touch counts as a drag
 
-const colResizeKey = new PluginKey<{ activeCell: number }>('percentColumnResizing');
+interface ColResizeState {
+  activeCell: number;        // cell whose right edge is under the pointer (-1 = none)
+  preview: number[] | null;  // in-flight drag widths, rendered instead of the stored ones
+}
+
+const colResizeKey = new PluginKey<ColResizeState>('percentColumnResizing');
 
 /// Column widths of a table as percentages summing to 100. Missing values are filled
 /// with the average and everything is normalized — which also transparently converts
@@ -332,17 +337,11 @@ function columnIndexOf(view: EditorView, cellPos: number): number {
   return map.colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
 }
 
-/// Live preview during a drag: writes the widths straight onto the first row's cells
-/// (with table-layout: fixed those govern the whole column) without touching the doc.
-function previewPercents(view: EditorView, cellPos: number, percents: number[]) {
-  const $cell = view.state.doc.resolve(cellPos);
-  const table = $cell.node(-1);
+/// Column index of the cell at document position [cellDocPos] inside [table], or -1.
+function columnIndexInTable(table: any, tableContentStart: number, cellDocPos: number): number {
   const map = TableMap.get(table);
-  const start = $cell.start(-1);
-  for (let col = 0; col < map.width; col++) {
-    const dom = view.nodeDOM(start + map.map[col]) as HTMLElement | null;
-    if (dom && dom.style) dom.style.width = `${percents[col].toFixed(2)}%`;
-  }
+  const index = map.map.indexOf(cellDocPos - tableContentStart);
+  return index < 0 ? -1 : index % map.width;
 }
 
 /// Commits column percentages to every cell, in one transaction.
@@ -387,31 +386,51 @@ function percentsAfterDrag(startPercents: number[], col: number, deltaPercent: n
   return result;
 }
 
-/// Renders the stored percentages, and marks the cell whose edge is under the pointer
-/// so the CSS can draw the resize handle.
-function columnWidthDecorations(state: EditorState, activeCell: number): DecorationSet {
+/// Renders column widths and the resize handle.
+///
+/// Widths come from [preview] while a drag is in flight and from the document
+/// otherwise — driving the live preview through plugin state (rather than poking the
+/// DOM directly) is what keeps the columns moving smoothly under the pointer: any
+/// transaction re-runs decorations, which would immediately overwrite direct DOM
+/// edits with the stored widths.
+///
+/// The handle class goes on EVERY cell of the active column, so the highlight is one
+/// continuous line down the full height of the table, not just the hovered row.
+function columnWidthDecorations(state: EditorState, st: ColResizeState): DecorationSet {
   const decos: Decoration[] = [];
   state.doc.descendants((node: any, pos: number) => {
     if (node.type !== schema.nodes.table) return true;
     const map = TableMap.get(node);
-    const percents = columnPercents(node);
     const start = pos + 1;
+    const isActiveTable = st.activeCell > pos && st.activeCell < pos + node.nodeSize;
+    const percents = isActiveTable && st.preview ? st.preview : columnPercents(node);
+
+    // Widths: the first row governs each column under table-layout: fixed.
     for (let col = 0; col < map.width; col++) {
-      const cellPos = map.map[col]; // first row governs the column under fixed layout
+      const cellPos = map.map[col];
       const cell = node.nodeAt(cellPos);
       if (!cell || cell.attrs.colspan !== 1) continue;
       decos.push(
         Decoration.node(start + cellPos, start + cellPos + cell.nodeSize, {
-          style: `width: ${percents[col].toFixed(2)}%`,
+          style: `width: ${(percents[col] ?? 100 / map.width).toFixed(2)}%`,
         }),
       );
     }
-    if (activeCell > -1 && activeCell > pos && activeCell < pos + node.nodeSize) {
-      const cell = state.doc.nodeAt(activeCell);
-      if (cell) {
-        decos.push(
-          Decoration.node(activeCell, activeCell + cell.nodeSize, { class: 'pm-col-resize-active' }),
-        );
+
+    // Handle: highlight the whole active column.
+    if (isActiveTable) {
+      const activeCol = columnIndexInTable(node, start, st.activeCell);
+      if (activeCol >= 0) {
+        for (let row = 0; row < map.height; row++) {
+          const cellPos = map.map[row * map.width + activeCol];
+          const cell = node.nodeAt(cellPos);
+          if (!cell) continue;
+          decos.push(
+            Decoration.node(start + cellPos, start + cellPos + cell.nodeSize, {
+              class: 'pm-col-resize-active',
+            }),
+          );
+        }
       }
     }
     return false;
@@ -457,24 +476,37 @@ function percentColumnResizing() {
     }
   };
 
-  return new Plugin<{ activeCell: number }>({
+  /// Pushes in-flight drag widths into plugin state so the decorations redraw the
+  /// columns under the pointer. Meta-only, so it never touches the document (no
+  /// save, no undo entry) — the real widths are written once, on release.
+  const setPreview = (view: EditorView, percents: number[] | null) => {
+    view.dispatch(view.state.tr.setMeta(colResizeKey, { preview: percents }));
+  };
+
+  return new Plugin<ColResizeState>({
     key: colResizeKey,
     state: {
-      init: () => ({ activeCell: -1 }),
+      init: () => ({ activeCell: -1, preview: null }),
       apply: (tr, prev) => {
-        const meta = tr.getMeta(colResizeKey) as { activeCell: number } | undefined;
-        if (meta) return { activeCell: meta.activeCell };
-        // Keep the highlighted cell's position valid across edits.
-        if (tr.docChanged && prev.activeCell > -1) {
-          return { activeCell: tr.mapping.map(prev.activeCell) };
+        const meta = tr.getMeta(colResizeKey) as Partial<ColResizeState> | undefined;
+        let next = prev;
+        if (meta) {
+          next = {
+            activeCell: meta.activeCell !== undefined ? meta.activeCell : prev.activeCell,
+            preview: meta.preview !== undefined ? meta.preview : prev.preview,
+          };
         }
-        return prev;
+        // Keep the highlighted cell's position valid across edits.
+        if (tr.docChanged && next.activeCell > -1) {
+          next = { ...next, activeCell: tr.mapping.map(next.activeCell) };
+        }
+        return next;
       },
     },
     props: {
       decorations(state) {
-        const pluginState = colResizeKey.getState(state);
-        return columnWidthDecorations(state, pluginState?.activeCell ?? -1);
+        const pluginState = colResizeKey.getState(state) ?? { activeCell: -1, preview: null };
+        return columnWidthDecorations(state, pluginState);
       },
       handleDOMEvents: {
         // ── Mouse ──
@@ -501,13 +533,15 @@ function percentColumnResizing() {
           const win = view.dom.ownerDocument.defaultView ?? window;
           const move = (e: MouseEvent) => {
             if (!dragging) return;
-            previewPercents(view, dragCell, applyDrag(view, e.clientX));
+            setPreview(view, applyDrag(view, e.clientX));
           };
           const finish = (e: MouseEvent) => {
             win.removeEventListener('mousemove', move);
             win.removeEventListener('mouseup', finish);
             if (dragging) {
-              commitPercents(view, dragCell, applyDrag(view, e.clientX));
+              const final = applyDrag(view, e.clientX);
+              setPreview(view, null);   // hand rendering back to the document
+              commitPercents(view, dragCell, final);
               setActive(view, -1);
               reset();
             }
@@ -526,9 +560,11 @@ function percentColumnResizing() {
           const cellPos = edgeCellAt(view, touch.clientX, touch.clientY, EDGE_ZONE_TOUCH);
           if (cellPos < 0) return false;
           // Only a candidate for now — a plain tap must still place the cursor, so
-          // nothing is claimed or committed until the finger actually moves.
+          // nothing is claimed or committed until the finger actually moves. The
+          // column does highlight immediately, as touch feedback that the edge was hit.
           beginDrag(view, cellPos, touch.clientX);
           dragging = false;
+          setActive(view, cellPos);
           return false;
         },
         touchmove(view, event) {
@@ -538,18 +574,24 @@ function percentColumnResizing() {
           if (!dragging) {
             if (Math.abs(touch.clientX - startX) < TOUCH_DRAG_THRESHOLD) return false;
             dragging = true;
-            setActive(view, dragCell);
           }
-          previewPercents(view, dragCell, applyDrag(view, touch.clientX));
+          setPreview(view, applyDrag(view, touch.clientX));
           // Stops the WebView scrolling / selecting text mid-drag.
           event.preventDefault();
           return true;
         },
         touchend(view, event) {
           if (dragCell < 0) return false;
-          if (!dragging) { reset(); return false; }
+          if (!dragging) {
+            // A tap, not a drag — drop the highlight and let it act normally.
+            setActive(view, -1);
+            reset();
+            return false;
+          }
           const touch = (event as TouchEvent).changedTouches[0];
-          commitPercents(view, dragCell, applyDrag(view, touch ? touch.clientX : startX));
+          const final = applyDrag(view, touch ? touch.clientX : startX);
+          setPreview(view, null);   // hand rendering back to the document
+          commitPercents(view, dragCell, final);
           setActive(view, -1);
           reset();
           return true;
@@ -557,7 +599,9 @@ function percentColumnResizing() {
         touchcancel(view) {
           if (dragCell < 0) return false;
           const wasDragging = dragging;
-          if (wasDragging) setActive(view, -1);
+          // Abandon the drag: discard the preview and revert to the stored widths.
+          if (wasDragging) setPreview(view, null);
+          setActive(view, -1);
           reset();
           return wasDragging;
         },

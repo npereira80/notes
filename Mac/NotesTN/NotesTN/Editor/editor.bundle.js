@@ -15190,15 +15190,10 @@
     const start = $cell.start(-1);
     return map2.colCount($cell.pos - start) + $cell.nodeAfter.attrs.colspan - 1;
   }
-  function previewPercents(view, cellPos, percents) {
-    const $cell = view.state.doc.resolve(cellPos);
-    const table = $cell.node(-1);
+  function columnIndexInTable(table, tableContentStart, cellDocPos) {
     const map2 = TableMap.get(table);
-    const start = $cell.start(-1);
-    for (let col = 0; col < map2.width; col++) {
-      const dom = view.nodeDOM(start + map2.map[col]);
-      if (dom && dom.style) dom.style.width = `${percents[col].toFixed(2)}%`;
-    }
+    const index = map2.map.indexOf(cellDocPos - tableContentStart);
+    return index < 0 ? -1 : index % map2.width;
   }
   function commitPercents(view, cellPos, percents) {
     const $cell = view.state.doc.resolve(cellPos);
@@ -15233,29 +15228,37 @@
     result[next] = pair - dragged;
     return result;
   }
-  function columnWidthDecorations(state, activeCell) {
+  function columnWidthDecorations(state, st) {
     const decos = [];
     state.doc.descendants((node, pos) => {
       if (node.type !== schema_default.nodes.table) return true;
       const map2 = TableMap.get(node);
-      const percents = columnPercents(node);
       const start = pos + 1;
+      const isActiveTable = st.activeCell > pos && st.activeCell < pos + node.nodeSize;
+      const percents = isActiveTable && st.preview ? st.preview : columnPercents(node);
       for (let col = 0; col < map2.width; col++) {
         const cellPos = map2.map[col];
         const cell = node.nodeAt(cellPos);
         if (!cell || cell.attrs.colspan !== 1) continue;
         decos.push(
           Decoration.node(start + cellPos, start + cellPos + cell.nodeSize, {
-            style: `width: ${percents[col].toFixed(2)}%`
+            style: `width: ${(percents[col] ?? 100 / map2.width).toFixed(2)}%`
           })
         );
       }
-      if (activeCell > -1 && activeCell > pos && activeCell < pos + node.nodeSize) {
-        const cell = state.doc.nodeAt(activeCell);
-        if (cell) {
-          decos.push(
-            Decoration.node(activeCell, activeCell + cell.nodeSize, { class: "pm-col-resize-active" })
-          );
+      if (isActiveTable) {
+        const activeCol = columnIndexInTable(node, start, st.activeCell);
+        if (activeCol >= 0) {
+          for (let row = 0; row < map2.height; row++) {
+            const cellPos = map2.map[row * map2.width + activeCol];
+            const cell = node.nodeAt(cellPos);
+            if (!cell) continue;
+            decos.push(
+              Decoration.node(start + cellPos, start + cellPos + cell.nodeSize, {
+                class: "pm-col-resize-active"
+              })
+            );
+          }
         }
       }
       return false;
@@ -15297,23 +15300,32 @@
         view.dispatch(view.state.tr.setMeta(colResizeKey, { activeCell: cellPos }));
       }
     };
+    const setPreview = (view, percents) => {
+      view.dispatch(view.state.tr.setMeta(colResizeKey, { preview: percents }));
+    };
     return new Plugin({
       key: colResizeKey,
       state: {
-        init: () => ({ activeCell: -1 }),
+        init: () => ({ activeCell: -1, preview: null }),
         apply: (tr, prev) => {
           const meta = tr.getMeta(colResizeKey);
-          if (meta) return { activeCell: meta.activeCell };
-          if (tr.docChanged && prev.activeCell > -1) {
-            return { activeCell: tr.mapping.map(prev.activeCell) };
+          let next = prev;
+          if (meta) {
+            next = {
+              activeCell: meta.activeCell !== void 0 ? meta.activeCell : prev.activeCell,
+              preview: meta.preview !== void 0 ? meta.preview : prev.preview
+            };
           }
-          return prev;
+          if (tr.docChanged && next.activeCell > -1) {
+            next = { ...next, activeCell: tr.mapping.map(next.activeCell) };
+          }
+          return next;
         }
       },
       props: {
         decorations(state) {
-          const pluginState = colResizeKey.getState(state);
-          return columnWidthDecorations(state, (pluginState == null ? void 0 : pluginState.activeCell) ?? -1);
+          const pluginState = colResizeKey.getState(state) ?? { activeCell: -1, preview: null };
+          return columnWidthDecorations(state, pluginState);
         },
         handleDOMEvents: {
           // ── Mouse ──
@@ -15337,13 +15349,15 @@
             const win = view.dom.ownerDocument.defaultView ?? window;
             const move = (e) => {
               if (!dragging) return;
-              previewPercents(view, dragCell, applyDrag(view, e.clientX));
+              setPreview(view, applyDrag(view, e.clientX));
             };
             const finish = (e) => {
               win.removeEventListener("mousemove", move);
               win.removeEventListener("mouseup", finish);
               if (dragging) {
-                commitPercents(view, dragCell, applyDrag(view, e.clientX));
+                const final = applyDrag(view, e.clientX);
+                setPreview(view, null);
+                commitPercents(view, dragCell, final);
                 setActive(view, -1);
                 reset();
               }
@@ -15362,6 +15376,7 @@
             if (cellPos < 0) return false;
             beginDrag(view, cellPos, touch.clientX);
             dragging = false;
+            setActive(view, cellPos);
             return false;
           },
           touchmove(view, event) {
@@ -15371,20 +15386,22 @@
             if (!dragging) {
               if (Math.abs(touch.clientX - startX) < TOUCH_DRAG_THRESHOLD) return false;
               dragging = true;
-              setActive(view, dragCell);
             }
-            previewPercents(view, dragCell, applyDrag(view, touch.clientX));
+            setPreview(view, applyDrag(view, touch.clientX));
             event.preventDefault();
             return true;
           },
           touchend(view, event) {
             if (dragCell < 0) return false;
             if (!dragging) {
+              setActive(view, -1);
               reset();
               return false;
             }
             const touch = event.changedTouches[0];
-            commitPercents(view, dragCell, applyDrag(view, touch ? touch.clientX : startX));
+            const final = applyDrag(view, touch ? touch.clientX : startX);
+            setPreview(view, null);
+            commitPercents(view, dragCell, final);
             setActive(view, -1);
             reset();
             return true;
@@ -15392,7 +15409,8 @@
           touchcancel(view) {
             if (dragCell < 0) return false;
             const wasDragging = dragging;
-            if (wasDragging) setActive(view, -1);
+            if (wasDragging) setPreview(view, null);
+            setActive(view, -1);
             reset();
             return wasDragging;
           }
