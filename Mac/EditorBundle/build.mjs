@@ -88,14 +88,14 @@ function writeEditorHtml(outDir) {
        purple highlight color, same value in light/dark. */
     --color-highlight-bg: #f1e0f3;
     --color-highlight-text: #b04ac5;
-    --color-link: #f0bc46;
+    --color-link: #f9b524;
     --color-hr: rgba(0, 0, 0, 0.2);
     /* Task list checkbox — darkYellow (brand color, same as --color-link) for the
        checked state instead of the browser's default system-accent blue, plus an
        explicit border so the unchecked box isn't left in native-control chrome
        (which doesn't follow the page's own light/dark theme). */
     --color-checkbox-border: rgba(0, 0, 0, 0.35);
-    --color-checkbox-checked-bg: #f0bc46;
+    --color-checkbox-checked-bg: #f9b524;
     /* Mac only — set imperatively via EditorWebView.swift's setTopInset (mirrors
        Android's data-theme trick above) whenever the WKWebView is resized to
        flow underneath the native window toolbar's translucent material, so
@@ -115,10 +115,10 @@ function writeEditorHtml(outDir) {
       /* Light orange: on the dark chip (#303030) this is 6.8:1. */
       --color-inline-code-text: #ffa657;
       --color-blockquote: #777;
-      --color-link: #f0bc46;
+      --color-link: #f9b524;
       --color-hr: rgba(255, 255, 255, 0.3);
       --color-checkbox-border: rgba(255, 255, 255, 0.4);
-      --color-checkbox-checked-bg: #f0bc46;
+      --color-checkbox-checked-bg: #f9b524;
     }
   }
 
@@ -138,10 +138,10 @@ function writeEditorHtml(outDir) {
     /* Light orange: on the dark chip (#303030) this is 6.8:1. */
     --color-inline-code-text: #ffa657;
     --color-blockquote: #777;
-    --color-link: #f0bc46;
+    --color-link: #f9b524;
     --color-hr: rgba(255, 255, 255, 0.3);
     --color-checkbox-border: rgba(255, 255, 255, 0.4);
-    --color-checkbox-checked-bg: #f0bc46;
+    --color-checkbox-checked-bg: #f9b524;
   }
   :root[data-theme="light"] {
     --color-text: #000;
@@ -151,10 +151,10 @@ function writeEditorHtml(outDir) {
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-inline-code-text: #a03500;
     --color-blockquote: #999;
-    --color-link: #f0bc46;
+    --color-link: #f9b524;
     --color-hr: rgba(0, 0, 0, 0.2);
     --color-checkbox-border: rgba(0, 0, 0, 0.35);
-    --color-checkbox-checked-bg: #f0bc46;
+    --color-checkbox-checked-bg: #f9b524;
   }
 
   html {
@@ -209,7 +209,7 @@ function writeEditorHtml(outDir) {
     min-height: inherit;
     /* Matches the native title field's cursor (MaterialTheme primary / NotesYellowDark
        on Android, AccentColor on Mac) instead of the browser-engine default black. */
-    caret-color: #f0bc46;
+    caret-color: #f9b524;
   }
 
   .ProseMirror > * + * { margin-top: 0.75em; }
@@ -441,7 +441,7 @@ function writeEditorHtml(outDir) {
     border-radius: 2px;
   }
   .ProseMirror .pm-find-current {
-    background: #f0bc46;
+    background: #f9b524;
   }
 
   /* Highlight */

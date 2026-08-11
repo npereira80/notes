@@ -5,9 +5,9 @@ import androidx.compose.ui.graphics.Color
 // Brand yellow palette — same values in light/dark. Mirrors Mac's AppColors.swift
 // and the --color-* custom properties in Mac/EditorBundle/build.mjs.
 // Vivid and Dark used to be two shades (#F9B524 / #DEAA33); both are now the single
-// brand yellow #F0BC46. The two names are kept because they mark different roles.
-val NotesYellowVivid = Color(0xFFF0BC46)   // selected notebook/note row (list focused), text-select handles, new note/notebook buttons
-val NotesYellowDark = Color(0xFFF0BC46)    // main tint color, caret, modal text buttons, active text field
+// brand yellow #F9B524. The two names are kept because they mark different roles.
+val NotesYellowVivid = Color(0xFFF9B524)   // selected notebook/note row (list focused), text-select handles, new note/notebook buttons
+val NotesYellowDark = Color(0xFFF9B524)    // main tint color, caret, modal text buttons, active text field
 val NotesYellowDimmed = Color(0xFFFBE699)  // selected note row when the editor (not list) has focus
 val NotesYellowTextSelect = Color(0xFFFAEBC3) // text selection highlight in the editor
 

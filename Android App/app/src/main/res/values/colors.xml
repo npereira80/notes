@@ -9,8 +9,8 @@
     <color name="white">#FFFFFFFF</color>
     <!-- Brand yellow palette — same values in light/dark, mirrored in
          ui/theme/Color.kt and Mac's AppColors.swift / EditorBundle build.mjs. -->
-    <color name="notes_yellow_vivid">#FFF0BC46</color>
-    <color name="notes_yellow_dark">#FFF0BC46</color>
+    <color name="notes_yellow_vivid">#FFF9B524</color>
+    <color name="notes_yellow_dark">#FFF9B524</color>
     <color name="notes_yellow_dimmed">#FFFBE699</color>
     <color name="notes_yellow_text_select">#FFFAEBC3</color>
 </resources>
