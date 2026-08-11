@@ -839,7 +839,14 @@ private fun NoteRow(
                 )
             }
         }
-        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+        // align(TopEnd): a DropdownMenu takes no space of its own, so it anchors to
+        // wherever it sits in the Box — top-start by default, which put the menu off
+        // at the row's left edge. Anchoring it to the end opens it on the right.
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            modifier = Modifier.align(Alignment.TopEnd),
+        ) {
             if (isTrash) {
                 DropdownMenuItem(text = { Text("Restore") }, onClick = {
                     showMenu = false
@@ -908,7 +915,14 @@ private fun TrashedFolderRow(
         ) {
             Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
         }
-        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+        // align(TopEnd): a DropdownMenu takes no space of its own, so it anchors to
+        // wherever it sits in the Box — top-start by default, which put the menu off
+        // at the row's left edge. Anchoring it to the end opens it on the right.
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false },
+            modifier = Modifier.align(Alignment.TopEnd),
+        ) {
             DropdownMenuItem(text = { Text("Restore") }, onClick = {
                 showMenu = false
                 onRestore()
