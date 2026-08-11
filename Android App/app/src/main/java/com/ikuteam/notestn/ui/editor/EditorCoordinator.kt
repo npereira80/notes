@@ -140,10 +140,22 @@ class EditorCoordinator {
     }
 
     // ── In-note find ──
-    fun find(query: String) {
+    /** [caseSensitive] is true once Replace is showing, so a replace only rewrites the
+     * exact-case text that was highlighted (see the find plugin in EditorBundle). */
+    fun find(query: String, caseSensitive: Boolean = false) {
         val wv = webView ?: return
         val encoded = jsonCoder.encodeToString(query)
-        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.find($encoded)", null) }
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.find($encoded, $caseSensitive)", null) }
+    }
+
+    fun replaceCurrent(replacement: String) = evaluateReplace("replaceCurrent", replacement)
+
+    fun replaceAll(replacement: String) = evaluateReplace("replaceAll", replacement)
+
+    private fun evaluateReplace(method: String, replacement: String) {
+        val wv = webView ?: return
+        val encoded = jsonCoder.encodeToString(replacement)
+        wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.$method($encoded)", null) }
     }
 
     fun findNext() {

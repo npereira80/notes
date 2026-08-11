@@ -158,16 +158,28 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
     // MARK: In-note find
 
-    func find(_ query: String) {
+    /// caseSensitive is true once Replace is showing, so a replace only rewrites the
+    /// exact-case text that was highlighted (see the find plugin in EditorBundle).
+    func find(_ query: String, caseSensitive: Bool = false) {
         guard let wv = webView,
               let data = try? JSONEncoder().encode(query),
               let json = String(data: data, encoding: .utf8) else { return }
-        wv.evaluateJavaScript("window.NativeEditor?.find(\(json))")
+        wv.evaluateJavaScript("window.NativeEditor?.find(\(json), \(caseSensitive))")
     }
 
     func findNext() { webView?.evaluateJavaScript("window.NativeEditor?.findNext()") }
     func findPrevious() { webView?.evaluateJavaScript("window.NativeEditor?.findPrevious()") }
     func endFind() { webView?.evaluateJavaScript("window.NativeEditor?.endFind()") }
+
+    func replaceCurrent(_ replacement: String) { evaluateReplace("replaceCurrent", replacement) }
+    func replaceAll(_ replacement: String) { evaluateReplace("replaceAll", replacement) }
+
+    private func evaluateReplace(_ method: String, _ replacement: String) {
+        guard let wv = webView,
+              let data = try? JSONEncoder().encode(replacement),
+              let json = String(data: data, encoding: .utf8) else { return }
+        wv.evaluateJavaScript("window.NativeEditor?.\(method)(\(json))")
+    }
 
     // MARK: Commands → JS
 
@@ -390,6 +402,10 @@ struct NoteEditorView: View {
     @State private var findQuery = ""
     @State private var findCount = 0
     @State private var findCurrent = 0
+    // Replace row (Apple Notes-style toggle). While it's showing, matching switches
+    // to case-sensitive so a replace only rewrites the exact text it highlighted.
+    @State private var showReplace = false
+    @State private var replaceText = ""
     // Captured below (see the GeometryReader background) from the safe area the
     // native window toolbar reserves — pushed into the WebView's own content via
     // editorCoordinator.setTopInset so it can flow its full height underneath the
@@ -415,10 +431,14 @@ struct NoteEditorView: View {
             if showFind {
                 EditorFindBar(
                     query: $findQuery,
+                    replacement: $replaceText,
+                    showReplace: $showReplace,
                     current: findCurrent,
                     count: findCount,
                     onNext: { editorCoordinator.findNext() },
                     onPrevious: { editorCoordinator.findPrevious() },
+                    onReplace: { editorCoordinator.replaceCurrent(replaceText) },
+                    onReplaceAll: { editorCoordinator.replaceAll(replaceText) },
                     onClose: closeFind
                 )
                 Divider()
@@ -511,7 +531,19 @@ struct NoteEditorView: View {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .opacity(0)
         )
-        .onChange(of: findQuery) { _, q in editorCoordinator.find(q) }
+        // Cmd+Option+F — the standard macOS Find & Replace shortcut: opens find with
+        // the replace row already showing.
+        .background(
+            Button("") { openFindWithReplace() }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+                .opacity(0)
+        )
+        .onChange(of: findQuery) { _, q in editorCoordinator.find(q, caseSensitive: showReplace) }
+        // Toggling Replace changes how matches are found (exact case while replacing),
+        // so re-run the search against the current query.
+        .onChange(of: showReplace) { _, replacing in
+            editorCoordinator.find(findQuery, caseSensitive: replacing)
+        }
         .onChange(of: editorCoordinator.isReady) { _, ready in
             // Reads the note fresh from AppState (falling back to the values captured
             // at init) — isReady also re-fires after a content-process-terminate
@@ -593,9 +625,17 @@ struct NoteEditorView: View {
         if showFind { closeFind() } else { showFind = true }
     }
 
+    /// Cmd+Option+F: open find with the replace row already showing.
+    private func openFindWithReplace() {
+        showReplace = true
+        showFind = true
+    }
+
     private func closeFind() {
         showFind = false
+        showReplace = false
         findQuery = ""
+        replaceText = ""
         findCount = 0
         findCurrent = 0
         editorCoordinator.endFind()
@@ -680,38 +720,62 @@ struct NoteEditorView: View {
 
 // MARK: - Find bar
 
-/// In-note find bar (Cmd+Shift+F) — search field, match counter, prev/next, Done.
+/// In-note find bar (Cmd+Shift+F, or Cmd+Option+F to open with Replace showing).
+/// Search field, match counter, prev/next, a Replace toggle, and — when it's on — a
+/// second row with the replacement field and Replace / Replace All, mirroring the
+/// Mac Notes find bar.
 struct EditorFindBar: View {
     @Binding var query: String
+    @Binding var replacement: String
+    @Binding var showReplace: Bool
     let current: Int
     let count: Int
     var onNext: () -> Void
     var onPrevious: () -> Void
+    var onReplace: () -> Void
+    var onReplaceAll: () -> Void
     var onClose: () -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find in note", text: $query)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
-                .focused($focused)
-                .onSubmit(onNext)
-            if !query.isEmpty {
-                Text(count > 0 ? "\(current)/\(count)" : "0/0")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Toggle("Replace", isOn: $showReplace)
+                    .toggleStyle(.checkbox)
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find in note", text: $query)
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    .focused($focused)
+                    .onSubmit(onNext)
+                if !query.isEmpty {
+                    Text(count > 0 ? "\(current)/\(count)" : "0/0")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Button(action: onPrevious) { Image(systemName: "chevron.up") }
+                    .buttonStyle(.borderless)
+                    .disabled(count == 0)
+                Button(action: onNext) { Image(systemName: "chevron.down") }
+                    .buttonStyle(.borderless)
+                    .disabled(count == 0)
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.cancelAction)
             }
-            Button(action: onPrevious) { Image(systemName: "chevron.up") }
-                .buttonStyle(.borderless)
-                .disabled(count == 0)
-            Button(action: onNext) { Image(systemName: "chevron.down") }
-                .buttonStyle(.borderless)
-                .disabled(count == 0)
-            Button("Done", action: onClose)
-                .keyboardShortcut(.cancelAction)
+            if showReplace {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.2.squarepath").foregroundStyle(.secondary)
+                    TextField("Replace with", text: $replacement)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .onSubmit(onReplace)
+                    Button("Replace", action: onReplace)
+                        .disabled(count == 0)
+                    Button("Replace All", action: onReplaceAll)
+                        .disabled(count == 0)
+                }
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

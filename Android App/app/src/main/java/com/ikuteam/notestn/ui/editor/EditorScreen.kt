@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.FormatIndentDecrease
 import androidx.compose.material.icons.filled.FormatIndentIncrease
 import androidx.compose.material.icons.filled.FormatQuote
@@ -171,9 +172,15 @@ fun EditorScreen(
     var findQuery by remember(note.id) { mutableStateOf("") }
     var findCount by remember(note.id) { mutableStateOf(0) }
     var findCurrent by remember(note.id) { mutableStateOf(0) }
+    // Replace row. While it's showing, matching switches to case-sensitive so a
+    // replace only rewrites the exact text it highlighted.
+    var showReplace by remember(note.id) { mutableStateOf(false) }
+    var replaceText by remember(note.id) { mutableStateOf("") }
     fun closeFind() {
         showFind = false
+        showReplace = false
         findQuery = ""
+        replaceText = ""
         findCount = 0
         findCurrent = 0
         coordinator.endFind()
@@ -376,12 +383,23 @@ fun EditorScreen(
                 if (showFind) {
                     FindBar(
                         query = findQuery,
+                        replacement = replaceText,
+                        showReplace = showReplace,
                         current = findCurrent,
                         count = findCount,
                         onQueryChange = { q ->
                             findQuery = q
-                            coordinator.find(q)
+                            coordinator.find(q, caseSensitive = showReplace)
                         },
+                        onReplacementChange = { replaceText = it },
+                        onToggleReplace = {
+                            showReplace = !showReplace
+                            // Matching switches to exact case while replacing, so
+                            // re-run the search against the current query.
+                            coordinator.find(findQuery, caseSensitive = showReplace)
+                        },
+                        onReplace = { coordinator.replaceCurrent(replaceText) },
+                        onReplaceAll = { coordinator.replaceAll(replaceText) },
                         onNext = { coordinator.findNext() },
                         onPrevious = { coordinator.findPrevious() },
                         onClose = { closeFind() },
@@ -637,15 +655,21 @@ private fun EditorToolbar(
     }
 }
 
-// In-note find bar (search field + match counter + prev/next + close). Auto-focuses
-// the field when it appears. Highlighting/stepping happens in the editor via the
-// coordinator's find/findNext/findPrevious.
+// In-note find bar (search field + match counter + prev/next + close), with an
+// optional replace row behind a toggle. Auto-focuses the field when it appears.
+// Highlighting/stepping/replacing happens in the editor via the coordinator.
 @Composable
 private fun FindBar(
     query: String,
+    replacement: String,
+    showReplace: Boolean,
     current: Int,
     count: Int,
     onQueryChange: (String) -> Unit,
+    onReplacementChange: (String) -> Unit,
+    onToggleReplace: () -> Unit,
+    onReplace: () -> Unit,
+    onReplaceAll: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onClose: () -> Unit,
@@ -653,53 +677,95 @@ private fun FindBar(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
     Surface(tonalElevation = 2.dp, shadowElevation = 2.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Filled.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(NotesYellowDark),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onNext() }),
-                modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(focusRequester),
-                decorationBox = { inner ->
-                    if (query.isEmpty()) {
-                        Text("Find in note", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    inner()
-                },
-            )
-            if (count > 0 || query.isNotEmpty()) {
-                Text(
-                    if (count > 0) "$current/$count" else "0/0",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 6.dp),
+        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
                 )
+                Spacer(Modifier.width(8.dp))
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(NotesYellowDark),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { onNext() }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester),
+                    decorationBox = { inner ->
+                        if (query.isEmpty()) {
+                            Text("Find in note", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        inner()
+                    },
+                )
+                if (count > 0 || query.isNotEmpty()) {
+                    Text(
+                        if (count > 0) "$current/$count" else "0/0",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 6.dp),
+                    )
+                }
+                // Shows/hides the replace row. Turning it on also switches matching to
+                // exact case, so a replace only rewrites what was highlighted.
+                IconButton(onClick = onToggleReplace) {
+                    Icon(
+                        Icons.Filled.FindReplace,
+                        contentDescription = if (showReplace) "Hide replace" else "Show replace",
+                        tint = if (showReplace) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = onPrevious, enabled = count > 0) {
+                    Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous match")
+                }
+                IconButton(onClick = onNext, enabled = count > 0) {
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next match")
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Clear, contentDescription = "Close find")
+                }
             }
-            IconButton(onClick = onPrevious, enabled = count > 0) {
-                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous match")
-            }
-            IconButton(onClick = onNext, enabled = count > 0) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next match")
-            }
-            IconButton(onClick = onClose) {
-                Icon(Icons.Filled.Clear, contentDescription = "Close find")
+            if (showReplace) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Filled.FindReplace,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    BasicTextField(
+                        value = replacement,
+                        onValueChange = onReplacementChange,
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(NotesYellowDark),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { onReplace() }),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            if (replacement.isEmpty()) {
+                                Text("Replace with", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            inner()
+                        },
+                    )
+                    TextButton(onClick = onReplace, enabled = count > 0) { Text("Replace") }
+                    TextButton(onClick = onReplaceAll, enabled = count > 0) { Text("All") }
+                }
             }
         }
     }

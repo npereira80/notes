@@ -67,6 +67,10 @@ private struct PadNoteEditorView: View {
     @State private var findQuery = ""
     @State private var findCount = 0
     @State private var findCurrent = 0
+    // Replace row. While it's showing, matching switches to case-sensitive so a
+    // replace only rewrites the exact text it highlighted.
+    @State private var showReplace = false
+    @State private var replaceText = ""
 
     private let noteID: String
     private let initialTitle: String
@@ -93,7 +97,9 @@ private struct PadNoteEditorView: View {
 
     private func closeFind() {
         showFind = false
+        showReplace = false
         findQuery = ""
+        replaceText = ""
         findCount = 0
         findCurrent = 0
         editorCoordinator.endFind()
@@ -105,10 +111,14 @@ private struct PadNoteEditorView: View {
             if showFind {
                 EditorFindBar(
                     query: $findQuery,
+                    replacement: $replaceText,
+                    showReplace: $showReplace,
                     current: findCurrent,
                     count: findCount,
                     onNext: { editorCoordinator.findNext() },
                     onPrevious: { editorCoordinator.findPrevious() },
+                    onReplace: { editorCoordinator.replaceCurrent(replaceText) },
+                    onReplaceAll: { editorCoordinator.replaceAll(replaceText) },
                     onClose: closeFind
                 )
                 Divider()
@@ -137,7 +147,17 @@ private struct PadNoteEditorView: View {
                     .keyboardShortcut("f", modifiers: [.command, .shift])
                     .opacity(0)
             )
-            .onChange(of: findQuery) { _, q in editorCoordinator.find(q) }
+            // Cmd+Option+F — opens find with the replace row already showing.
+            .background(
+                Button("") { showReplace = true; showFind = true }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                    .opacity(0)
+            )
+            .onChange(of: findQuery) { _, q in editorCoordinator.find(q, caseSensitive: showReplace) }
+            // Toggling Replace changes how matches are found (exact case while replacing).
+            .onChange(of: showReplace) { _, replacing in
+                editorCoordinator.find(findQuery, caseSensitive: replacing)
+            }
             .onChange(of: editorCoordinator.isReady) { _, ready in
                 guard ready else { return }
                 // Reads the note fresh from AppState (falling back to the init-time

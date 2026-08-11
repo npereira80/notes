@@ -15480,11 +15480,11 @@
     });
     return { text, map: map2 };
   }
-  function computeFindMatches(doc3, query) {
+  function computeFindMatches(doc3, query, caseSensitive) {
     if (!query) return [];
     const { text, map: map2 } = collectDocText(doc3);
-    const haystack = text.toLowerCase();
-    const needle = query.toLowerCase();
+    const haystack = caseSensitive ? text : text.toLowerCase();
+    const needle = caseSensitive ? query : query.toLowerCase();
     const matches2 = [];
     let from2 = 0;
     while (from2 <= haystack.length) {
@@ -15815,18 +15815,21 @@
         new Plugin({
           key: findKey,
           state: {
-            init: () => ({ query: "", matches: [], current: -1 }),
+            init: () => ({ query: "", caseSensitive: false, matches: [], current: -1 }),
             apply: (tr, prev, _old, newState) => {
               const meta = tr.getMeta(findKey);
               if (meta) {
-                if (meta.type === "clear") return { query: "", matches: [], current: -1 };
+                if (meta.type === "clear") {
+                  return { query: "", caseSensitive: false, matches: [], current: -1 };
+                }
                 if (meta.type === "set") {
                   const query = meta.query ?? "";
-                  const matches2 = computeFindMatches(newState.doc, query);
+                  const caseSensitive = meta.caseSensitive ?? prev.caseSensitive;
+                  const matches2 = computeFindMatches(newState.doc, query, caseSensitive);
                   const head = newState.selection.head;
                   let current = matches2.findIndex((m) => m.from >= head);
                   if (current < 0) current = matches2.length ? 0 : -1;
-                  return { query, matches: matches2, current };
+                  return { query, caseSensitive, matches: matches2, current };
                 }
                 if ((meta.type === "next" || meta.type === "prev") && prev.matches.length) {
                   const step = meta.type === "next" ? 1 : -1;
@@ -15836,7 +15839,7 @@
                 return prev;
               }
               if (tr.docChanged && prev.query) {
-                const matches2 = computeFindMatches(newState.doc, prev.query);
+                const matches2 = computeFindMatches(newState.doc, prev.query, prev.caseSensitive);
                 const current = matches2.length ? Math.min(Math.max(prev.current, 0), matches2.length - 1) : -1;
                 return { ...prev, matches: matches2, current };
               }
@@ -16113,8 +16116,10 @@
         (_a = view.__setEditable) == null ? void 0 : _a.call(view, value);
       },
       // ── Find in note ──
-      find(query) {
-        view.dispatch(view.state.tr.setMeta(findKey, { type: "set", query }));
+      // caseSensitive is passed by native: false for plain find, true once Replace is
+      // showing, so a replace only ever rewrites the exact-case text it highlighted.
+      find(query, caseSensitive) {
+        view.dispatch(view.state.tr.setMeta(findKey, { type: "set", query, caseSensitive: !!caseSensitive }));
         afterFindUpdate();
       },
       findNext() {
@@ -16123,6 +16128,33 @@
       },
       findPrevious() {
         view.dispatch(view.state.tr.setMeta(findKey, { type: "prev" }));
+        afterFindUpdate();
+      },
+      /// Replaces just the current match, then re-runs the search so the counter and
+      /// highlights reflect the new text.
+      replaceCurrent(replacement) {
+        const st = findKey.getState(view.state);
+        if (!st || st.current < 0) return;
+        const match = st.matches[st.current];
+        if (!match) return;
+        const tr = view.state.tr.insertText(replacement, match.from, match.to);
+        tr.setMeta(findKey, { type: "set", query: st.query, caseSensitive: st.caseSensitive });
+        view.dispatch(tr);
+        afterFindUpdate();
+      },
+      /// Replaces every match in ONE transaction (so it's a single undo step). Applied
+      /// back-to-front: rewriting the last match first leaves every earlier match's
+      /// position untouched, so no position mapping is needed.
+      replaceAll(replacement) {
+        const st = findKey.getState(view.state);
+        if (!st || !st.matches.length) return;
+        const tr = view.state.tr;
+        for (let i = st.matches.length - 1; i >= 0; i--) {
+          const match = st.matches[i];
+          tr.insertText(replacement, match.from, match.to);
+        }
+        tr.setMeta(findKey, { type: "set", query: st.query, caseSensitive: st.caseSensitive });
+        view.dispatch(tr);
         afterFindUpdate();
       },
       endFind() {

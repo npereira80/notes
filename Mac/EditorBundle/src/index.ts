@@ -684,7 +684,15 @@ function percentColumnResizing() {
 const findKey = new PluginKey<FindState>('find');
 
 interface FindMatch { from: number; to: number; }
-interface FindState { query: string; matches: FindMatch[]; current: number; }
+interface FindState {
+  query: string;
+  // Find on its own is case-insensitive (typing "lq" should turn up "Lq"). Turning
+  // on Replace switches matching to exact case, so what's highlighted is exactly
+  // what a replace would rewrite — "Lq" never clobbers "lq".
+  caseSensitive: boolean;
+  matches: FindMatch[];
+  current: number;
+}
 
 /** Flattens the doc into a single lowercased string plus a per-character map back to
  * document positions, inserting a newline (mapped to the block boundary) between
@@ -709,11 +717,11 @@ function collectDocText(doc: any): { text: string; map: number[] } {
   return { text, map };
 }
 
-function computeFindMatches(doc: any, query: string): FindMatch[] {
+function computeFindMatches(doc: any, query: string, caseSensitive: boolean): FindMatch[] {
   if (!query) return [];
   const { text, map } = collectDocText(doc);
-  const haystack = text.toLowerCase();
-  const needle = query.toLowerCase();
+  const haystack = caseSensitive ? text : text.toLowerCase();
+  const needle = caseSensitive ? query : query.toLowerCase();
   const matches: FindMatch[] = [];
   let from = 0;
   while (from <= haystack.length) {
@@ -1146,19 +1154,24 @@ function createEditor(): EditorView {
       new Plugin({
         key: findKey,
         state: {
-          init: (): FindState => ({ query: '', matches: [], current: -1 }),
+          init: (): FindState => ({ query: '', caseSensitive: false, matches: [], current: -1 }),
           apply: (tr, prev: FindState, _old, newState): FindState => {
-            const meta = tr.getMeta(findKey) as { type: string; query?: string } | undefined;
+            const meta = tr.getMeta(findKey) as
+              | { type: string; query?: string; caseSensitive?: boolean }
+              | undefined;
             if (meta) {
-              if (meta.type === 'clear') return { query: '', matches: [], current: -1 };
+              if (meta.type === 'clear') {
+                return { query: '', caseSensitive: false, matches: [], current: -1 };
+              }
               if (meta.type === 'set') {
                 const query = meta.query ?? '';
-                const matches = computeFindMatches(newState.doc, query);
+                const caseSensitive = meta.caseSensitive ?? prev.caseSensitive;
+                const matches = computeFindMatches(newState.doc, query, caseSensitive);
                 // Start at the first match at/after the caret, else the first match.
                 const head = newState.selection.head;
                 let current = matches.findIndex((m) => m.from >= head);
                 if (current < 0) current = matches.length ? 0 : -1;
-                return { query, matches, current };
+                return { query, caseSensitive, matches, current };
               }
               if ((meta.type === 'next' || meta.type === 'prev') && prev.matches.length) {
                 const step = meta.type === 'next' ? 1 : -1;
@@ -1169,7 +1182,7 @@ function createEditor(): EditorView {
             }
             // Keep matches in sync as the document changes while find is open.
             if (tr.docChanged && prev.query) {
-              const matches = computeFindMatches(newState.doc, prev.query);
+              const matches = computeFindMatches(newState.doc, prev.query, prev.caseSensitive);
               const current = matches.length ? Math.min(Math.max(prev.current, 0), matches.length - 1) : -1;
               return { ...prev, matches, current };
             }
@@ -1450,9 +1463,11 @@ interface NativeEditorBridge {
   setContent: (title: string, body: string) => void;
   execCommand: (command: string, value?: any) => void;
   setEditable: (value: boolean) => void;
-  find: (query: string) => void;
+  find: (query: string, caseSensitive?: boolean) => void;
   findNext: () => void;
   findPrevious: () => void;
+  replaceCurrent: (replacement: string) => void;
+  replaceAll: (replacement: string) => void;
   endFind: () => void;
   focus: () => void;
   blur: () => void;
@@ -1561,8 +1576,10 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     // ── Find in note ──
-    find(query: string) {
-      view.dispatch(view.state.tr.setMeta(findKey, { type: 'set', query }));
+    // caseSensitive is passed by native: false for plain find, true once Replace is
+    // showing, so a replace only ever rewrites the exact-case text it highlighted.
+    find(query: string, caseSensitive?: boolean) {
+      view.dispatch(view.state.tr.setMeta(findKey, { type: 'set', query, caseSensitive: !!caseSensitive }));
       afterFindUpdate();
     },
     findNext() {
@@ -1573,6 +1590,36 @@ document.addEventListener('DOMContentLoaded', () => {
       view.dispatch(view.state.tr.setMeta(findKey, { type: 'prev' }));
       afterFindUpdate();
     },
+
+    /// Replaces just the current match, then re-runs the search so the counter and
+    /// highlights reflect the new text.
+    replaceCurrent(replacement: string) {
+      const st = findKey.getState(view.state);
+      if (!st || st.current < 0) return;
+      const match = st.matches[st.current];
+      if (!match) return;
+      const tr = view.state.tr.insertText(replacement, match.from, match.to);
+      tr.setMeta(findKey, { type: 'set', query: st.query, caseSensitive: st.caseSensitive });
+      view.dispatch(tr);
+      afterFindUpdate();
+    },
+
+    /// Replaces every match in ONE transaction (so it's a single undo step). Applied
+    /// back-to-front: rewriting the last match first leaves every earlier match's
+    /// position untouched, so no position mapping is needed.
+    replaceAll(replacement: string) {
+      const st = findKey.getState(view.state);
+      if (!st || !st.matches.length) return;
+      const tr = view.state.tr;
+      for (let i = st.matches.length - 1; i >= 0; i--) {
+        const match = st.matches[i];
+        tr.insertText(replacement, match.from, match.to);
+      }
+      tr.setMeta(findKey, { type: 'set', query: st.query, caseSensitive: st.caseSensitive });
+      view.dispatch(tr);
+      afterFindUpdate();
+    },
+
     endFind() {
       view.dispatch(view.state.tr.setMeta(findKey, { type: 'clear' }));
     },
