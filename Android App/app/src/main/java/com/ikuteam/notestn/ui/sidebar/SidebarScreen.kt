@@ -7,6 +7,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -83,8 +91,16 @@ fun SidebarScreen(
                 },
             )
         },
+        // Top only, so the notebook list fills to the bottom edge and scrolls
+        // underneath the gesture bar instead of stopping above it and leaving a strip
+        // of window background. The list's own bottom padding below keeps the last
+        // row reachable.
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top),
         floatingActionButton = {
             FloatingActionButton(
+                // The Scaffold no longer insets its content at the bottom, so the FAB
+                // has to clear the gesture bar itself.
+                modifier = Modifier.navigationBarsPadding(),
                 onClick = { showAddDialog = true },
                 containerColor = NotesYellowVivid,
                 contentColor = Color.Black,
@@ -103,7 +119,14 @@ fun SidebarScreen(
                 onRefresh = { viewModel.syncNow() },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                // Clears the gesture bar and the FAB above it, since the list now runs
+                // to the bottom edge of the screen.
+                contentPadding = PaddingValues(
+                    bottom = 88.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+                ),
+            ) {
             item {
                 NotebookRow(
                     title = "All Notes",

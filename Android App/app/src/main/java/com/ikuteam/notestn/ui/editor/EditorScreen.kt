@@ -18,11 +18,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.size
@@ -369,7 +372,15 @@ fun EditorScreen(
             // double-counting is what made changing the extra gap value invisible.
             // systemBars (status + navigation bars only, no ime) keeps the WebView's
             // safe-area padding when the keyboard is closed without touching ime.
-            contentWindowInsets = WindowInsets.systemBars,
+            // Top only. The bottom is left off deliberately so the note runs to the
+            // bottom edge of the screen and scrolls underneath the gesture bar,
+            // rather than stopping above it and leaving a strip of window
+            // background. The page carries its own bottom padding (see the
+            // body.pm-android rule in EditorBundle/build.mjs) so the last line can
+            // still be scrolled clear of it. Not safeDrawing/systemBars in full:
+            // either includes the IME, which would shift this whole Box up by the
+            // keyboard height on top of the explicit imeHeightDp calc below.
+            contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top),
             topBar = {
                 TopAppBar(
                     title = {},
@@ -408,6 +419,10 @@ fun EditorScreen(
                     // action next to the note itself, and it matches the New Note
                     // button in the list.
                     SmallFloatingActionButton(
+                        // The Scaffold no longer insets its content at the bottom (see
+                        // contentWindowInsets), so the FAB has to clear the gesture bar
+                        // itself.
+                        modifier = Modifier.navigationBarsPadding(),
                         onClick = { editMode = true },
                         containerColor = NotesYellowVivid,
                         contentColor = Color.Black,

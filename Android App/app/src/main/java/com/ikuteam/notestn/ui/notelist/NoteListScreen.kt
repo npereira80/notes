@@ -17,7 +17,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -230,8 +236,11 @@ fun NoteListScreen(
     }
     val noteCountLabel = if (notes.size == 1) "1 Note" else "${notes.size} Notes"
 
-    // Bottom inset so list content isn't hidden behind the floating search/add bar.
-    val listBottomPadding = 88.dp
+    // Bottom inset so list content isn't hidden behind the floating search/add bar,
+    // plus the gesture bar's own height: the Scaffold no longer insets the content at
+    // the bottom (see contentWindowInsets below), so the list runs to the screen edge
+    // and this is what keeps the last row scrollable clear of both.
+    val listBottomPadding = 88.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     Scaffold(
         modifier = modifier,
@@ -266,6 +275,10 @@ fun NoteListScreen(
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = groupedBackground),
             )
         },
+        // Top only, so the list fills to the bottom edge and scrolls underneath the
+        // gesture bar instead of stopping above it and leaving a strip of window
+        // background. listBottomPadding above keeps the last row reachable.
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top),
         floatingActionButtonPosition = FabPosition.Center,
         floatingActionButton = {
             // Notes can't be created directly in Trash — only search is offered there.

@@ -5,6 +5,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -59,8 +64,11 @@ fun SettingsScreen(
                 },
             )
         },
+        // Top only, so the screen's background fills to the bottom edge rather than
+        // stopping above the gesture bar; the content below insets itself instead.
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top),
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize().navigationBarsPadding()) {
             Text(
                 "ACCOUNT",
                 style = MaterialTheme.typography.labelMedium,
