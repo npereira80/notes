@@ -213,7 +213,7 @@ class JoplinSyncEngine(context: Context) {
 
         val isHtml = parsed.props["markup_language"] == "2"
         val converted = if (isHtml) parsed.body else MarkdownToHtml.convert(parsed.body)
-        val body = rewriteResourceLinks(converted)
+        val body = fillAttachmentMetadata(rewriteResourceLinks(converted))
 
         db.saveNote(
             Note(
@@ -312,6 +312,42 @@ class JoplinSyncEngine(context: Context) {
     /** Rewrites Joplin's `:/resourceId` link syntax (inside src="..."/href="...") into
      * the local WebView URL for that resource, once it's been synced. Links to a
      * resource that hasn't synced yet (or was never one) are left untouched. */
+    /** Escapes a value going into an HTML attribute — an unescaped quote in a filename
+     * would end the attribute early and corrupt the tag. */
+    private fun escapeAttributeValue(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+
+    /** Fills in an attachment card's size and MIME type (and its name, if the link had
+     * none) from the locally stored resource — MarkdownToHtml can only know the id and
+     * the link text. A resource that hasn't been downloaded yet is left as-is: the card
+     * still shows its name and becomes openable once the blob arrives on a later sync. */
+    private fun fillAttachmentMetadata(html: String): String =
+        attachmentCardRegex.replace(html) { m ->
+            val id = m.groupValues[1]
+            val linkText = m.groupValues[2]
+            val meta = db.resourceMeta(id)
+            if (meta == null) {
+                // Joplin uses the same [title](:/id) syntax for a link to another NOTE.
+                // MarkdownToHtml can't tell the two apart, but here we can: if this id
+                // is a note, put the link back rather than leaving a card that could
+                // never resolve to a file. Otherwise it's most likely a resource whose
+                // blob hasn't downloaded yet — leave the card, it fills in on a later
+                // sync.
+                return@replace if (db.noteUpdatedTime(id) != null) {
+                    "<a href=\":/$id\">$linkText</a>"
+                } else {
+                    m.value
+                }
+            }
+            val (resourceTitle, mime, size) = meta
+            val title = linkText.ifEmpty { escapeAttributeValue(resourceTitle) }
+            "<div class=\"pm-attachment\" data-resource-id=\"$id\" data-title=\"$title\"" +
+                " data-size=\"$size\" data-mime=\"${escapeAttributeValue(mime)}\"></div>"
+        }
+
     private fun rewriteResourceLinks(html: String): String {
         return resourceLinkRegex.replace(html) { m ->
             val id = m.groupValues[3]
@@ -344,5 +380,12 @@ class JoplinSyncEngine(context: Context) {
         // Matches src="..."/href="..." attributes whose value is Joplin's ":/{32-hex-id}"
         // resource link syntax, e.g. src=":/4a6ec8ff...".
         private val resourceLinkRegex = Regex("""(src|href)="(:/([0-9a-fA-F]{32}))"""")
+
+        // Attachment card as MarkdownToHtml emits it from a [name](:/id) link — it can
+        // only know the id and the link text, so size/mime are filled in from the
+        // resources table (see fillAttachmentMetadata).
+        private val attachmentCardRegex = Regex(
+            """<div class="pm-attachment" data-resource-id="([0-9a-fA-F]{32})" data-title="([^"]*)" data-size="0" data-mime=""></div>"""
+        )
     }
 }

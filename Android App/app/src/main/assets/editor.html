@@ -322,6 +322,51 @@
     margin: 1.5em 0;
   }
 
+  /* File attachment card (see the attachment node in schema.ts) — filename, a
+     "Type · Size" line, and a type badge on the right, modelled on Apple Notes.
+     Clicking it opens the file in the platform's own previewer. */
+  .ProseMirror .pm-attachment {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 12px 0;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--color-code-bg);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .ProseMirror .pm-attachment-info {
+    min-width: 0; /* lets a long filename ellipsize instead of stretching the card */
+  }
+  .ProseMirror .pm-attachment-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ProseMirror .pm-attachment-meta {
+    margin-top: 2px;
+    font-size: 0.85em;
+    color: var(--color-secondary);
+  }
+  .ProseMirror .pm-attachment-badge {
+    flex-shrink: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--color-bg);
+    color: var(--color-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7em;
+    letter-spacing: 0.04em;
+  }
+  /* Selected via keyboard/click — ProseMirror's own class for a selected atom. */
+  .ProseMirror .pm-attachment.ProseMirror-selectednode {
+    outline: 2px solid var(--color-link);
+  }
+
   /* Links */
   .ProseMirror a {
     color: var(--color-link);

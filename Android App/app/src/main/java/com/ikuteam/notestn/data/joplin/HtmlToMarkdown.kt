@@ -29,6 +29,15 @@ object HtmlToMarkdown {
     }
 
     private fun renderBlock(el: Element): String {
+        // File attachment card → Joplin's own format for a non-image resource, a plain
+        // link to it. Other Joplin clients can then open the file too. Checked before
+        // the tag switch below, where a plain "div" would otherwise be unwrapped to its
+        // (empty) text and the attachment silently lost.
+        if (el.tagName() == "div" && el.hasClass("pm-attachment")) {
+            val id = el.attr("data-resource-id")
+            val title = el.attr("data-title").ifEmpty { "Attachment" }
+            return "[${escapeMarkdown(title)}](:/$id)"
+        }
         return when (el.tagName()) {
             "p" -> renderInline(el)
 

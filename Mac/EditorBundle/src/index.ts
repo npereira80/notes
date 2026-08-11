@@ -48,7 +48,9 @@ interface NativeMessage {
   // with a fully-formed scheme URL (https:, mailto:, tel:).
   // findResult reports in-note find progress to the native find bar: `count` total
   // matches and `index` the 1-based current match (0 when there are none).
-  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged' | 'findResult';
+  // openAttachment carries a resource id in `resourceId`; native resolves it to the
+  // local file and opens it in the platform's own previewer.
+  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged' | 'findResult' | 'openAttachment';
   title?: string;
   html?: string;
   selectionState?: SelectionState;
@@ -57,6 +59,7 @@ interface NativeMessage {
   focused?: boolean;
   count?: number;
   index?: number;
+  resourceId?: string;
 }
 
 // ── Swift bridge ──────────────────────────────────────────────────────────────
@@ -1110,6 +1113,26 @@ function createEditor(): EditorView {
               if (isAndroid && editable) return false;
               event.preventDefault();
               postToNative({ type: 'openUrl', url: anchor.href });
+              return true;
+            },
+          },
+        },
+      }),
+
+      // Attachment cards: a click opens the file in the platform's own previewer
+      // (QuickLook on Mac/iOS, the default app on Android). Same edit-mode rule as
+      // links on Android — while editing, a tap selects the card instead of opening.
+      new Plugin({
+        props: {
+          handleDOMEvents: {
+            click(view, event) {
+              const card = (event.target as HTMLElement).closest('.pm-attachment') as HTMLElement | null;
+              if (!card) return false;
+              if (isAndroid && editable) return false;
+              const resourceId = card.getAttribute('data-resource-id') || '';
+              if (!resourceId) return false;
+              event.preventDefault();
+              postToNative({ type: 'openAttachment', resourceId });
               return true;
             },
           },

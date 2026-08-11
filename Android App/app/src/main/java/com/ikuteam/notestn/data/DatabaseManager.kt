@@ -484,6 +484,16 @@ class DatabaseManager private constructor(context: Context) :
      * resolver / clipboard data URI at ingestion) rather than guessing from the file
      * extension, since HEIC files can end up saved with a non-".heic" extension when
      * MimeTypeMap doesn't recognize "image/heic" on a given Android version. */
+    /** Title / MIME / size for a resource, or null if it isn't stored locally. Used to
+     * fill in an attachment card's metadata — Joplin's Markdown link carries only the
+     * name and id, so size and type have to come from the resources table. */
+    fun resourceMeta(id: String): Triple<String, String, Long>? {
+        readableDatabase.rawQuery("SELECT title, mime, file_size FROM resources WHERE id = ?", arrayOf(id)).use { c ->
+            if (!c.moveToFirst()) return null
+            return Triple(c.getString(0), c.getString(1), c.getLong(2))
+        }
+    }
+
     fun resourceMimeTypeForFilename(filename: String): String? {
         readableDatabase.rawQuery("SELECT mime FROM resources WHERE filename = ?", arrayOf(filename)).use { c ->
             if (!c.moveToFirst()) return null

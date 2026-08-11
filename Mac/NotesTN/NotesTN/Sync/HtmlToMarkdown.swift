@@ -54,6 +54,13 @@ enum HtmlToMarkdown {
             // Markdown that other Joplin clients render natively.
             return hasColumnWidths(el) ? serialize(el) : renderTable(el)
 
+        case "div" where el.attributes["class"]?.contains("pm-attachment") == true:
+            // File attachment card → Joplin's own format for a non-image resource,
+            // a plain link to it. Other Joplin clients can then open the file too.
+            let id = el.attributes["data-resource-id"] ?? ""
+            let title = el.attributes["data-title"] ?? "Attachment"
+            return "[\(escapeMarkdown(title))](:/\(id))"
+
         case "details":
             return serialize(el) // no Markdown equivalent — pass through as raw HTML
 

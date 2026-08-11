@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import AppKit
+import QuickLook
 import UniformTypeIdentifiers
 
 // MARK: - Selection State (mirrors JS SelectionState)
@@ -104,6 +105,15 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
             // user pick which maps app to open it in.
             if let address = body["url"] as? String {
                 presentMapsChooser(address: address)
+            }
+
+        case "openAttachment":
+            // Attachment card tapped — preview the file in QuickLook, the system's
+            // own previewer, rather than handing it to another app.
+            if let resourceId = body["resourceId"] as? String,
+               let url = DatabaseManager.shared.resourceLocalFileURL(id: resourceId),
+               FileManager.default.fileExists(atPath: url.path) {
+                AttachmentPreview.show(url: url)
             }
 
         case "findResult":
@@ -275,6 +285,16 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
 
     // MARK: Image insertion
 
+    /// Inserts a file attachment card (see the `attachment` node in the editor schema).
+    func insertAttachment(resourceId: String, title: String, size: Int, mime: String) {
+        execCommand("attachment", value: [
+            "resourceId": resourceId,
+            "title": title,
+            "size": size,
+            "mime": mime,
+        ])
+    }
+
     func insertImage(src: String, alt: String? = nil, resourceId: String? = nil) {
         var value: [String: Any] = ["src": src]
         if let alt { value["alt"] = alt }
@@ -394,7 +414,14 @@ struct NoteEditorView: View {
     @EnvironmentObject var appState: AppState
 
     @StateObject private var editorCoordinator = EditorCoordinator()
-    @State private var isShowingImagePicker = false
+    // Which picker the single .fileImporter below is currently standing in for.
+    // pickerKind is set before opening and left alone afterwards, so it's still valid
+    // when the completion handler runs.
+    private enum PickerKind { case image, attachment }
+    @State private var pickerKind: PickerKind = .image
+    @State private var isShowingPicker = false
+    // A picked file waiting on the "this is a large file" confirmation below.
+    @State private var oversizeAttachment: URL?
     @State private var showPermanentDeleteConfirm = false
     // In-note find (Cmd+Shift+F) — highlights matches in the editor, distinct from the
     // global note-list search.
@@ -503,7 +530,8 @@ struct NoteEditorView: View {
                 ToolbarItem(placement: .primaryAction) {
                     EditorToolbarView(
                         coordinator: editorCoordinator,
-                        onInsertImage: { isShowingImagePicker = true }
+                        onInsertImage: { pickerKind = .image; isShowingPicker = true },
+                        onAttachFile: { pickerKind = .attachment; isShowingPicker = true }
                     )
                 }
             }
@@ -565,13 +593,34 @@ struct NoteEditorView: View {
                 editorCoordinator.setContent(title: note.title, body: note.body)
             }
         }
-        // Image picker
+        // ONE file importer for both the image and attachment pickers, switching its
+        // allowed types on pickerKind. Two .fileImporter modifiers stacked on the same
+        // view is a SwiftUI trap — the second one often never presents.
         .fileImporter(
-            isPresented: $isShowingImagePicker,
-            allowedContentTypes: [.image],
+            isPresented: $isShowingPicker,
+            allowedContentTypes: pickerKind == .image ? [.image] : [.item],
             allowsMultipleSelection: false
         ) { result in
-            handleImagePick(result: result)
+            switch pickerKind {
+            case .image: handleImagePick(result: result)
+            case .attachment: handleAttachmentPick(result: result)
+            }
+        }
+        .confirmationDialog(
+            "Attach this large file?",
+            isPresented: Binding(
+                get: { oversizeAttachment != nil },
+                set: { if !$0 { oversizeAttachment = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Attach") {
+                if let url = oversizeAttachment { attachFile(at: url) }
+                oversizeAttachment = nil
+            }
+            Button("Cancel", role: .cancel) { oversizeAttachment = nil }
+        } message: {
+            Text("This file is over 20 MB. It will be uploaded to Joplin Cloud and downloaded onto your other devices.")
         }
     }
 
@@ -639,6 +688,60 @@ struct NoteEditorView: View {
         findCount = 0
         findCurrent = 0
         editorCoordinator.endFind()
+    }
+
+    // MARK: Attachment handling
+
+    /// Files at or above this size prompt for confirmation first — every attachment is
+    /// uploaded to Joplin Cloud and downloaded onto every other device.
+    private static let largeAttachmentBytes = 20 * 1_000_000
+
+    private func handleAttachmentPick(result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        if size >= Self.largeAttachmentBytes {
+            oversizeAttachment = url   // ask first (see the confirmationDialog above)
+        } else {
+            attachFile(at: url)
+        }
+    }
+
+    /// Copies the file into the resources directory, records it as a Resource so sync
+    /// picks it up, and inserts the attachment card.
+    private func attachFile(at url: URL) {
+        let resourceId = Note.generateId()
+        guard let resourcesDir = DatabaseManager.shared.resourcesDirectory else { return }
+
+        let ext = url.pathExtension.isEmpty ? "bin" : url.pathExtension
+        let filename = "\(resourceId).\(ext)"
+        let destURL = resourcesDir.appendingPathComponent(filename)
+        do {
+            try FileManager.default.copyItem(at: url, to: destURL)
+        } catch {
+            print("[Editor] Failed to copy attachment: \(error)")
+            return
+        }
+
+        let size = (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+        let displayName = url.lastPathComponent
+        // New resource, never seen by Joplin Cloud yet — dirty so it gets pushed, not
+        // synced since the server doesn't know about it.
+        DatabaseManager.shared.saveResource(Resource(
+            id: resourceId,
+            title: displayName,
+            mimeType: mimeType,
+            filename: filename,
+            fileSize: size,
+            noteId: noteID
+        ), dirty: true, synced: false)
+
+        editorCoordinator.insertAttachment(
+            resourceId: resourceId,
+            title: displayName,
+            size: size,
+            mime: mimeType
+        )
     }
 
     // MARK: Image handling
@@ -718,6 +821,32 @@ struct NoteEditorView: View {
     }
 }
 
+// MARK: - Attachment preview (QuickLook)
+
+/// Presents an attachment in QuickLook — the same preview you get from Space in
+/// Finder. QLPreviewPanel is a shared, app-wide panel that pulls its items from a
+/// data source, so this singleton holds the URL being previewed and acts as that
+/// source. Using the system panel rather than opening the file in another app keeps
+/// the preview lightweight and read-only.
+final class AttachmentPreview: NSObject, QLPreviewPanelDataSource {
+    private static let shared = AttachmentPreview()
+    private var url: URL?
+
+    static func show(url: URL) {
+        shared.url = url
+        guard let panel = QLPreviewPanel.shared() else { return }
+        panel.dataSource = shared
+        panel.reloadData()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { url == nil ? 0 : 1 }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        url as NSURL?
+    }
+}
+
 // MARK: - Find bar
 
 /// In-note find bar (Cmd+Shift+F, or Cmd+Option+F to open with Replace showing).
@@ -789,6 +918,7 @@ struct EditorFindBar: View {
 struct EditorToolbarView: View {
     @ObservedObject var coordinator: EditorCoordinator
     var onInsertImage: () -> Void
+    var onAttachFile: () -> Void
     @State private var showMarkdownSource = false
 
     var body: some View {
@@ -827,6 +957,9 @@ struct EditorToolbarView: View {
             }
             FormatButton(icon: "photo", tooltip: "Insert Image") {
                 onInsertImage()
+            }
+            FormatButton(icon: "paperclip", tooltip: "Attach File") {
+                onAttachFile()
             }
 
             Divider()

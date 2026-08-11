@@ -548,6 +548,20 @@ final class DatabaseManager {
         #endif
     }
 
+    /// Title / MIME / size for a resource, or nil if it isn't stored locally. Used to
+    /// fill in an attachment card's metadata — Joplin's Markdown link carries only the
+    /// name and id, so size and type have to come from the resources table.
+    func resourceMeta(id: String) -> (title: String, mime: String, size: Int)? {
+        var result: (String, String, Int)?
+        withStatement("SELECT title, mime, file_size FROM resources WHERE id = ?") { stmt in
+            bind(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                result = (string(stmt, 0), string(stmt, 1), Int(sqlite3_column_int64(stmt, 2)))
+            }
+        }
+        return result
+    }
+
     func resourceExists(id: String) -> Bool {
         var exists = false
         withStatement("SELECT 1 FROM resources WHERE id = ?") { stmt in

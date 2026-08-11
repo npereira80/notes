@@ -14452,6 +14452,66 @@
   }
 
   // src/schema.ts
+  function formatFileSize(bytes) {
+    if (!bytes || bytes < 0) return "";
+    if (bytes < 1e3) return `${bytes} bytes`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let value = bytes / 1e3;
+    let unit = 0;
+    while (value >= 1e3 && unit < units.length - 1) {
+      value /= 1e3;
+      unit++;
+    }
+    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+  }
+  function fileExtension(title, mime) {
+    var _a;
+    const fromName = (_a = /\.([A-Za-z0-9]+)$/.exec(title || "")) == null ? void 0 : _a[1];
+    if (fromName) return fromName.toLowerCase();
+    const fromMime = (mime || "").split("/").pop() || "";
+    return fromMime.toLowerCase();
+  }
+  function fileExtensionLabel(title, mime) {
+    const ext = fileExtension(title, mime);
+    return ext ? ext.toUpperCase().slice(0, 4) : "FILE";
+  }
+  function fileTypeName(title, mime) {
+    const byExtension = {
+      pdf: "PDF Document",
+      doc: "Word Document",
+      docx: "Word Document",
+      xls: "Excel Spreadsheet",
+      xlsx: "Excel Spreadsheet",
+      csv: "CSV Document",
+      ppt: "PowerPoint Presentation",
+      pptx: "PowerPoint Presentation",
+      pages: "Pages Document",
+      numbers: "Numbers Spreadsheet",
+      key: "Keynote Presentation",
+      txt: "Plain Text Document",
+      rtf: "Rich Text Document",
+      md: "Markdown Document",
+      zip: "ZIP Archive",
+      gz: "Archive",
+      tar: "Archive",
+      mp3: "Audio",
+      wav: "Audio",
+      m4a: "Audio",
+      mp4: "Movie",
+      mov: "Movie",
+      json: "JSON Document",
+      html: "HTML Document"
+    };
+    const ext = fileExtension(title, mime);
+    if (byExtension[ext]) return byExtension[ext];
+    if (ext) return `${ext.toUpperCase()} File`;
+    return mime || "File";
+  }
+  function attachmentMeta(title, mime, size) {
+    const type = fileTypeName(title, mime);
+    const readableSize = formatFileSize(size);
+    return readableSize ? `${type} \xB7 ${readableSize}` : type;
+  }
   var nodes = {
     doc: {
       // Every doc has exactly one title node, always first, followed by the note
@@ -14681,6 +14741,58 @@
         return ["img", attrs];
       }
     },
+    // File attachment (PDF, Word, …) shown as an Apple Notes-style card: filename,
+    // then a "Type · Size" line, with a type badge on the right. An atom so the card
+    // behaves as a single object rather than editable content, and a block so it sits
+    // on its own line.
+    //
+    // Round-trips through Joplin Markdown as a plain resource link, [title](:/id) —
+    // Joplin's own format for a non-image attachment — so other Joplin clients can
+    // still open it. See HtmlToMarkdown/MarkdownToHtml.
+    attachment: {
+      group: "block",
+      atom: true,
+      selectable: true,
+      attrs: {
+        resourceId: { default: "" },
+        title: { default: "" },
+        size: { default: 0 },
+        mime: { default: "" }
+      },
+      parseDOM: [{
+        tag: "div.pm-attachment",
+        getAttrs(dom) {
+          if (typeof dom === "string") return {};
+          return {
+            resourceId: dom.getAttribute("data-resource-id") || "",
+            title: dom.getAttribute("data-title") || "",
+            size: Number(dom.getAttribute("data-size") || "0") || 0,
+            mime: dom.getAttribute("data-mime") || ""
+          };
+        }
+      }],
+      toDOM(node) {
+        const { resourceId, title, size, mime } = node.attrs;
+        return [
+          "div",
+          {
+            class: "pm-attachment",
+            "data-resource-id": resourceId,
+            "data-title": title,
+            "data-size": String(size ?? 0),
+            "data-mime": mime ?? "",
+            contenteditable: "false"
+          },
+          [
+            "div",
+            { class: "pm-attachment-info" },
+            ["div", { class: "pm-attachment-name" }, title || "Attachment"],
+            ["div", { class: "pm-attachment-meta" }, attachmentMeta(title, mime, size)]
+          ],
+          ["div", { class: "pm-attachment-badge" }, fileExtensionLabel(title, mime)]
+        ];
+      }
+    },
     // Table nodes from prosemirror-tables
     ...tableNodes({
       tableGroup: "block",
@@ -14788,6 +14900,18 @@
   };
   var setParagraph = (view) => setBlockType2(schema_default.nodes.paragraph)(view.state, view.dispatch, view);
   var setHeading = (view, level) => setBlockType2(schema_default.nodes.heading, { level: level ?? 1 })(view.state, view.dispatch, view);
+  var insertAttachment = (view, value) => {
+    if (!(value == null ? void 0 : value.resourceId)) return false;
+    const { state, dispatch } = view;
+    const node = schema_default.nodes.attachment.create({
+      resourceId: value.resourceId,
+      title: value.title ?? "",
+      size: value.size ?? 0,
+      mime: value.mime ?? ""
+    });
+    if (dispatch) dispatch(state.tr.replaceSelectionWith(node).scrollIntoView());
+    return true;
+  };
   var setCodeBlock = (view) => {
     const { state, dispatch } = view;
     const { $from, $to, empty: empty2 } = state.selection;
@@ -14986,6 +15110,7 @@
     // Insert
     horizontalRule: insertHorizontalRule,
     image: insertImage,
+    attachment: insertAttachment,
     table: insertTable,
     toggle: insertToggle,
     // History
@@ -15776,6 +15901,25 @@
                 if (isAndroid && editable) return false;
                 event.preventDefault();
                 postToNative({ type: "openUrl", url: anchor.href });
+                return true;
+              }
+            }
+          }
+        }),
+        // Attachment cards: a click opens the file in the platform's own previewer
+        // (QuickLook on Mac/iOS, the default app on Android). Same edit-mode rule as
+        // links on Android — while editing, a tap selects the card instead of opening.
+        new Plugin({
+          props: {
+            handleDOMEvents: {
+              click(view2, event) {
+                const card = event.target.closest(".pm-attachment");
+                if (!card) return false;
+                if (isAndroid && editable) return false;
+                const resourceId = card.getAttribute("data-resource-id") || "";
+                if (!resourceId) return false;
+                event.preventDefault();
+                postToNative({ type: "openAttachment", resourceId });
                 return true;
               }
             }

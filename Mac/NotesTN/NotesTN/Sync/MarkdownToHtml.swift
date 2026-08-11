@@ -31,6 +31,10 @@ enum MarkdownToHtml {
     private static let inlineCodeRegex = try! NSRegularExpression(pattern: "`([^`]+)`")
     private static let imageRegex = try! NSRegularExpression(pattern: "!\\[([^\\]]*)\\]\\(([^)]+)\\)")
     private static let linkRegex = try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\(([^)]+)\\)")
+    // [name](:/32-char-id) — Joplin's link to a non-image resource, i.e. an attachment.
+    private static let attachmentLinkRegex = try! NSRegularExpression(
+        pattern: "\\[([^\\]]*)\\]\\(:/([0-9a-fA-F]{32})\\)"
+    )
     private static let headingRegex = try! NSRegularExpression(pattern: "^(#{1,6})\\s+(.*)$")
     private static let checklistRegex = try! NSRegularExpression(pattern: "^([-*])\\s+\\[( |x|X)\\]\\s+(.*)$")
     private static let bulletRegex = try! NSRegularExpression(pattern: "^([-*])\\s+(.*)$")
@@ -48,6 +52,18 @@ enum MarkdownToHtml {
             let line = lines[i]
 
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                i += 1
+
+            } else if let m = firstMatch(attachmentLinkRegex, line.trimmingCharacters(in: .whitespaces)) {
+                // A line that is just [name](:/id) is Joplin's non-image attachment
+                // (images use the ![...] form) — render it as an attachment card.
+                // Handled here rather than inline because the card is a block: nesting
+                // a <div> inside a <p> would make the browser split the paragraph.
+                // size/mime aren't in the Markdown; JoplinSyncEngine fills them in
+                // from the resources table.
+                // escapeAttribute, not escapeHtml: this value goes inside an attribute,
+                // where an unescaped quote in a filename would end it early.
+                html += "<div class=\"pm-attachment\" data-resource-id=\"\(m.groups[1])\" data-title=\"\(escapeAttribute(m.groups[0]))\" data-size=\"0\" data-mime=\"\"></div>\n"
                 i += 1
 
             } else if line.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("<table") {
@@ -129,6 +145,7 @@ enum MarkdownToHtml {
                     !matches(blockquoteRegex, lines[i]) &&
                     !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") &&
                     !lines[i].trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("<table") &&
+                    firstMatch(attachmentLinkRegex, lines[i].trimmingCharacters(in: .whitespaces)) == nil &&
                     !matches(hrRegex, lines[i].trimmingCharacters(in: .whitespaces)) &&
                     !isTableStart(lines, i) {
                     paragraphLines.append(lines[i])
@@ -310,6 +327,16 @@ enum MarkdownToHtml {
     // the line — this regex restores it to a real (unescaped) <br> afterward, which
     // the editor's `hard_break` schema node (parseDOM: [{ tag: 'br' }]) understands.
     private static let brRegex = try! NSRegularExpression(pattern: "&lt;br\\s*/?&gt;", options: [.caseInsensitive])
+
+    /// Escapes a value going into an HTML attribute. escapeHtml below is for text
+    /// content and leaves quotes alone, which would end an attribute early.
+    private static func escapeAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
 
     private static func escapeHtml(_ text: String) -> String {
         // Some Joplin clients write a literal "&nbsp;" entity into the Markdown source

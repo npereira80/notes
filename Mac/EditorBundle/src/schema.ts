@@ -3,12 +3,83 @@
  * Adapted from Joplin's packages/editor/ProseMirror/schema.ts.
  * Nodes: doc, paragraph, text, hard_break, heading, code_block, blockquote,
  *        horizontal_rule, bullet_list, ordered_list, list_item,
- *        task_list, task_list_item, image, table nodes.
+ *        task_list, task_list_item, image, attachment, table nodes.
  * Marks: strong, em, code, strikethrough, link, sub, sup, highlight.
  */
 
 import { Schema } from 'prosemirror-model';
 import { tableNodes } from 'prosemirror-tables';
+
+// ── Attachment card helpers ───────────────────────────────────────────────────
+
+/// "1.2 MB" — decimal units, matching what Finder and Apple Notes show.
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes < 0) return '';
+  if (bytes < 1000) return `${bytes} bytes`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1000;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function fileExtension(title: string, mime: string): string {
+  const fromName = /\.([A-Za-z0-9]+)$/.exec(title || '')?.[1];
+  if (fromName) return fromName.toLowerCase();
+  const fromMime = (mime || '').split('/').pop() || '';
+  return fromMime.toLowerCase();
+}
+
+/// Short badge shown on the right of the card, e.g. "PDF".
+function fileExtensionLabel(title: string, mime: string): string {
+  const ext = fileExtension(title, mime);
+  return ext ? ext.toUpperCase().slice(0, 4) : 'FILE';
+}
+
+/// Human-readable type name, the way Apple Notes labels attachments
+/// ("Word Document"). Falls back to "<EXT> File", then to the MIME type.
+function fileTypeName(title: string, mime: string): string {
+  const byExtension: Record<string, string> = {
+    pdf: 'PDF Document',
+    doc: 'Word Document',
+    docx: 'Word Document',
+    xls: 'Excel Spreadsheet',
+    xlsx: 'Excel Spreadsheet',
+    csv: 'CSV Document',
+    ppt: 'PowerPoint Presentation',
+    pptx: 'PowerPoint Presentation',
+    pages: 'Pages Document',
+    numbers: 'Numbers Spreadsheet',
+    key: 'Keynote Presentation',
+    txt: 'Plain Text Document',
+    rtf: 'Rich Text Document',
+    md: 'Markdown Document',
+    zip: 'ZIP Archive',
+    gz: 'Archive',
+    tar: 'Archive',
+    mp3: 'Audio',
+    wav: 'Audio',
+    m4a: 'Audio',
+    mp4: 'Movie',
+    mov: 'Movie',
+    json: 'JSON Document',
+    html: 'HTML Document',
+  };
+  const ext = fileExtension(title, mime);
+  if (byExtension[ext]) return byExtension[ext];
+  if (ext) return `${ext.toUpperCase()} File`;
+  return mime || 'File';
+}
+
+/// The card's second line: "Word Document · 642 KB" (size omitted if unknown).
+function attachmentMeta(title: string, mime: string, size: number): string {
+  const type = fileTypeName(title, mime);
+  const readableSize = formatFileSize(size);
+  return readableSize ? `${type} · ${readableSize}` : type;
+}
 
 const nodes = {
   doc: {
@@ -240,6 +311,57 @@ const nodes = {
       if (height) attrs.height = height;
       if (node.attrs['data-resource-id']) attrs['data-resource-id'] = node.attrs['data-resource-id'];
       return ['img', attrs];
+    },
+  },
+
+  // File attachment (PDF, Word, …) shown as an Apple Notes-style card: filename,
+  // then a "Type · Size" line, with a type badge on the right. An atom so the card
+  // behaves as a single object rather than editable content, and a block so it sits
+  // on its own line.
+  //
+  // Round-trips through Joplin Markdown as a plain resource link, [title](:/id) —
+  // Joplin's own format for a non-image attachment — so other Joplin clients can
+  // still open it. See HtmlToMarkdown/MarkdownToHtml.
+  attachment: {
+    group: 'block',
+    atom: true,
+    selectable: true,
+    attrs: {
+      resourceId: { default: '' },
+      title: { default: '' },
+      size: { default: 0 },
+      mime: { default: '' },
+    },
+    parseDOM: [{
+      tag: 'div.pm-attachment',
+      getAttrs(dom: HTMLElement | string) {
+        if (typeof dom === 'string') return {};
+        return {
+          resourceId: dom.getAttribute('data-resource-id') || '',
+          title: dom.getAttribute('data-title') || '',
+          size: Number(dom.getAttribute('data-size') || '0') || 0,
+          mime: dom.getAttribute('data-mime') || '',
+        };
+      },
+    }],
+    toDOM(node: any) {
+      const { resourceId, title, size, mime } = node.attrs;
+      return [
+        'div',
+        {
+          class: 'pm-attachment',
+          'data-resource-id': resourceId,
+          'data-title': title,
+          'data-size': String(size ?? 0),
+          'data-mime': mime ?? '',
+          contenteditable: 'false',
+        },
+        ['div', { class: 'pm-attachment-info' },
+          ['div', { class: 'pm-attachment-name' }, title || 'Attachment'],
+          ['div', { class: 'pm-attachment-meta' }, attachmentMeta(title, mime, size)],
+        ],
+        ['div', { class: 'pm-attachment-badge' }, fileExtensionLabel(title, mime)],
+      ] as any;
     },
   },
 

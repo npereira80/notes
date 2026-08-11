@@ -29,6 +29,8 @@ object MarkdownToHtml {
     private val inlineCodeRegex = Regex("`([^`]+)`")
     private val imageRegex = Regex("!\\[([^\\]]*)]\\(([^)]+)\\)")
     private val linkRegex = Regex("\\[([^\\]]+)]\\(([^)]+)\\)")
+    // [name](:/32-char-id) — Joplin's link to a non-image resource, i.e. an attachment.
+    private val attachmentLinkRegex = Regex("^\\[([^\\]]*)]\\(:/([0-9a-fA-F]{32})\\)$")
     private val headingRegex = Regex("^(#{1,6})\\s+(.*)$")
     private val checklistRegex = Regex("^([-*])\\s+\\[( |x|X)]\\s+(.*)$")
     private val bulletRegex = Regex("^([-*])\\s+(.*)$")
@@ -49,6 +51,23 @@ object MarkdownToHtml {
 
             when {
                 line.isBlank() -> i++
+
+                // A line that is just [name](:/id) is Joplin's non-image attachment
+                // (images use the ![...] form) — render it as an attachment card.
+                // Handled at block level rather than inline because the card is a
+                // block: nesting a <div> inside a <p> would make the browser split the
+                // paragraph. size/mime aren't in the Markdown; JoplinSyncEngine fills
+                // them in from the resources table.
+                attachmentLinkRegex.matches(line.trim()) -> {
+                    val m = attachmentLinkRegex.find(line.trim())!!
+                    // escapeAttribute, not escapeHtml: this value goes inside an
+                    // attribute, where an unescaped quote in a filename would end it.
+                    html.append(
+                        "<div class=\"pm-attachment\" data-resource-id=\"${m.groupValues[2]}\"" +
+                            " data-title=\"${escapeAttribute(m.groupValues[1])}\" data-size=\"0\" data-mime=\"\"></div>\n"
+                    )
+                    i++
+                }
 
                 // Raw HTML table passthrough. HtmlToMarkdown emits a manually-resized
                 // table as raw HTML (pipe tables can't express column widths), so it has
@@ -136,6 +155,7 @@ object MarkdownToHtml {
                         !blockquoteRegex.matches(lines[i]) &&
                         !lines[i].trimStart().startsWith("```") && !hrRegex.matches(lines[i].trim()) &&
                         !lines[i].trimStart().startsWith("<table", ignoreCase = true) &&
+                        !attachmentLinkRegex.matches(lines[i].trim()) &&
                         !isTableStart(lines, i)
                     ) {
                         paragraphLines.add(lines[i])
@@ -310,6 +330,14 @@ object MarkdownToHtml {
     // the line — this regex restores it to a real (unescaped) <br> afterward, which
     // the editor's `hard_break` schema node (parseDOM: [{ tag: 'br' }]) understands.
     private val brRegex = Regex("&lt;br\\s*/?&gt;", RegexOption.IGNORE_CASE)
+
+    /** Escapes a value going into an HTML attribute. escapeHtml below is for text
+     * content and leaves quotes alone, which would end an attribute early. */
+    private fun escapeAttribute(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
 
     private fun escapeHtml(text: String): String {
         val escaped = text

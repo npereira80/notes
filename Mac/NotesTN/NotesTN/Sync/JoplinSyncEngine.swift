@@ -208,7 +208,7 @@ actor JoplinSyncEngine {
 
         let isHtml = parsed.props["markup_language"] == "2"
         let converted = isHtml ? parsed.body : MarkdownToHtml.convert(parsed.body)
-        let body = rewriteResourceLinks(converted)
+        let body = fillAttachmentMetadata(rewriteResourceLinks(converted))
 
         db.saveNote(Note(
             id: id,
@@ -292,6 +292,60 @@ actor JoplinSyncEngine {
             fileSize: Int(parsed.props["size"] ?? "") ?? bytes.count,
             noteId: ""
         ), dirty: false, synced: true)
+    }
+
+    // Attachment card as MarkdownToHtml emits it from a [name](:/id) link — it can only
+    // know the id and the link text, so size/mime come from the resources table here.
+    private static let attachmentCardRegex = try! NSRegularExpression(
+        pattern: #"<div class="pm-attachment" data-resource-id="([0-9a-fA-F]{32})" data-title="([^"]*)" data-size="0" data-mime=""></div>"#
+    )
+
+    /// Escapes a value going into an HTML attribute. escapeHtml elsewhere is written for
+    /// text content and leaves quotes alone, which would end the attribute early — a
+    /// filename like My "Notes" File.pdf would corrupt the tag.
+    private func escapeAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    /// Fills in an attachment card's size and MIME type (and its name, if the link had
+    /// none) from the locally stored resource. A resource that hasn't been downloaded
+    /// yet is left as-is — the card still shows its name and stays openable once the
+    /// blob arrives on a later sync.
+    private func fillAttachmentMetadata(_ html: String) -> String {
+        let regex = Self.attachmentCardRegex
+        let nsHtml = html as NSString
+        let matchesFound = regex.matches(in: html, range: NSRange(location: 0, length: nsHtml.length))
+        guard !matchesFound.isEmpty else { return html }
+
+        var result = ""
+        var lastEnd = 0
+        for match in matchesFound {
+            result += nsHtml.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            let id = nsHtml.substring(with: match.range(at: 1))
+            let linkText = nsHtml.substring(with: match.range(at: 2))
+            if let meta = db.resourceMeta(id: id) {
+                let title = linkText.isEmpty ? meta.title : linkText
+                result += "<div class=\"pm-attachment\" data-resource-id=\"\(id)\" data-title=\"\(escapeAttribute(title))\" data-size=\"\(meta.size)\" data-mime=\"\(escapeAttribute(meta.mime))\"></div>"
+            } else if db.noteUpdatedTime(id: id) != nil {
+                // Joplin uses the same [title](:/id) syntax for a link to another NOTE.
+                // MarkdownToHtml can't tell the two apart, but here we can: this id is a
+                // note, not a resource, so put the link back rather than leaving a card
+                // that could never resolve to a file.
+                result += "<a href=\":/\(id)\">\(linkText)</a>"
+            } else {
+                // Neither a known resource nor a note — most likely a resource whose
+                // blob hasn't been downloaded yet. Leave the card; it fills in on a
+                // later sync.
+                result += nsHtml.substring(with: match.range)
+            }
+            lastEnd = match.range.location + match.range.length
+        }
+        result += nsHtml.substring(with: NSRange(location: lastEnd, length: nsHtml.length - lastEnd))
+        return result
     }
 
     /// Rewrites Joplin's `:/resourceId` link syntax (inside src="..."/href="...") into

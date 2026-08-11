@@ -74,6 +74,23 @@ const setHeading: CommandFn = (view, level?: number) =>
 // each paragraph into its own separate box. The code_block schema declares
 // `marks: ''`, so any inline code/bold/etc. marks are dropped in the process, which
 // is exactly what's wanted when converting inline-code lines into a real block.
+/// Inserts a file attachment card. Native copies the picked file into the resources
+/// directory, saves the Resource row, then calls this with its metadata.
+const insertAttachment: CommandFn = (view, value?: {
+  resourceId: string; title?: string; size?: number; mime?: string;
+}) => {
+  if (!value?.resourceId) return false;
+  const { state, dispatch } = view;
+  const node = schema.nodes.attachment.create({
+    resourceId: value.resourceId,
+    title: value.title ?? '',
+    size: value.size ?? 0,
+    mime: value.mime ?? '',
+  });
+  if (dispatch) dispatch(state.tr.replaceSelectionWith(node).scrollIntoView());
+  return true;
+};
+
 const setCodeBlock: CommandFn = (view) => {
   const { state, dispatch } = view;
   const { $from, $to, empty } = state.selection;
@@ -328,6 +345,7 @@ export const commands: Record<string, CommandFn> = {
   // Insert
   horizontalRule: insertHorizontalRule,
   image: insertImage,
+  attachment: insertAttachment,
   table: insertTable,
   toggle: insertToggle,
 
