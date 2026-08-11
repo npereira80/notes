@@ -17,10 +17,7 @@ import { baseKeymap, chainCommands, exitCode, newlineInCode } from 'prosemirror-
 import { splitListItem, liftListItem, sinkListItem } from 'prosemirror-schema-list';
 import { dropCursor } from 'prosemirror-dropcursor';
 import { gapCursor } from 'prosemirror-gapcursor';
-import {
-  tableEditing, columnResizing, columnResizingPluginKey,
-  updateColumnsOnResize, TableMap, cellAround,
-} from 'prosemirror-tables';
+import { tableEditing, TableMap, cellAround } from 'prosemirror-tables';
 import { inputRules, wrappingInputRule, textblockTypeInputRule, smartQuotes, emDash, ellipsis, InputRule } from 'prosemirror-inputrules';
 
 import schema from './schema';
@@ -263,149 +260,304 @@ function buildAutoLinkDecos(doc: any): DecorationSet {
   return DecorationSet.create(doc, decos);
 }
 
-// ── Touch column resizing (tables) ─────────────────────────────────────────────
+// ── Column resizing (percentage-based, mouse + touch) ──────────────────────────
 //
-// prosemirror-tables' columnResizing plugin is mouse-only: it drives the drag from
-// mousedown + a window mousemove listener. Touch devices don't produce that stream
-// (a browser only synthesizes a click after touchend), so on Android/iPad tapping a
-// column edge showed the handle but dragging did nothing. This plugin adds the touch
-// half, reusing the same plugin state and the library's own exported helpers so the
-// behavior and the committed document are identical to the mouse path.
+// Replaces prosemirror-tables' own columnResizing, which is pixel-based, mouse-only,
+// and not zero-sum: it wrote an absolute width for the dragged column and an inline
+// min-width on the table, so dragging a middle column pushed the table past the
+// window (horizontal overflow), and touch drags did nothing at all.
+//
+// This version:
+//   * stores widths as PERCENTAGES of the table (they always sum to 100), so a table
+//     can never be wider than the note and the layout is resolution-independent;
+//   * is zero-sum with the immediate next column — dragging a boundary trades width
+//     between exactly those two columns, leaving the rest untouched;
+//   * enforces a 10% minimum per column;
+//   * handles mouse AND touch with the same math.
 
-const TOUCH_HANDLE_WIDTH = 16; // generous grab zone for a fingertip
-const TOUCH_CELL_MIN_WIDTH = 40; // keep in sync with columnResizing's cellMinWidth
+const COL_MIN_PERCENT = 10;      // a column can never be squeezed below this
+const EDGE_ZONE_MOUSE = 10;      // px either side of a boundary that grabs it
+const EDGE_ZONE_TOUCH = 16;      // wider for a fingertip
+const TOUCH_DRAG_THRESHOLD = 4;  // px of movement before a touch counts as a drag
 
-/// Document position of the cell whose RIGHT edge is within the grab zone of the
-/// given viewport x/y, or -1. Mirrors the library's internal edgeCell(side: 'right').
-function touchEdgeCell(view: EditorView, clientX: number, clientY: number): number {
-  const found = view.posAtCoords({ left: clientX - TOUCH_HANDLE_WIDTH, top: clientY });
+const colResizeKey = new PluginKey<{ activeCell: number }>('percentColumnResizing');
+
+/// Column widths of a table as percentages summing to 100. Missing values are filled
+/// with the average and everything is normalized — which also transparently converts
+/// tables saved earlier with pixel widths into percentages.
+function columnPercents(table: any): number[] {
+  const map = TableMap.get(table);
+  const widths: number[] = new Array(map.width).fill(0);
+  for (let col = 0; col < map.width; col++) {
+    for (let row = 0; row < map.height; row++) {
+      const pos = map.map[row * map.width + col];
+      const cell = table.nodeAt(pos);
+      if (!cell) continue;
+      const cw = cell.attrs.colwidth;
+      if (!cw) continue;
+      const index = cell.attrs.colspan === 1 ? 0 : col - map.colCount(pos);
+      if (cw[index]) { widths[col] = cw[index]; break; }
+    }
+  }
+  const known = widths.filter((w) => w > 0);
+  if (!known.length) return new Array(map.width).fill(100 / map.width);
+  const average = known.reduce((a, b) => a + b, 0) / known.length;
+  for (let i = 0; i < widths.length; i++) if (!widths[i]) widths[i] = average;
+  const total = widths.reduce((a, b) => a + b, 0);
+  return widths.map((w) => (w / total) * 100);
+}
+
+/// The cell whose RIGHT edge is within [zone] px of the given point, or -1. The last
+/// column is excluded: the table is pinned to 100% width, so its right edge has
+/// nothing to trade against.
+function edgeCellAt(view: EditorView, clientX: number, clientY: number, zone: number): number {
+  const found = view.posAtCoords({ left: clientX - zone, top: clientY });
   if (!found) return -1;
   const $cell = cellAround(view.state.doc.resolve(found.pos));
-  return $cell ? $cell.pos : -1;
-}
-
-/// Current rendered width of the column the given cell belongs to.
-function touchCurrentColWidth(view: EditorView, cellPos: number): number {
-  const cell = view.state.doc.nodeAt(cellPos);
-  const colwidth = cell?.attrs.colwidth;
-  const explicit = colwidth && colwidth[colwidth.length - 1];
-  if (explicit) return explicit;
-  const dom = view.domAtPos(cellPos);
-  const el = dom.node.childNodes[dom.offset] as HTMLElement | undefined;
-  return el?.offsetWidth ?? TOUCH_CELL_MIN_WIDTH;
-}
-
-/// Live preview while dragging — repaints the table's colgroup without touching the
-/// document (same approach as the library's displayColumnWidth).
-function touchPreviewWidth(view: EditorView, cellPos: number, width: number) {
-  const $cell = view.state.doc.resolve(cellPos);
-  const table = $cell.node(-1);
-  const start = $cell.start(-1);
-  const col = TableMap.get(table).colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
-  let dom: any = view.domAtPos(start).node;
-  while (dom && dom.nodeName !== 'TABLE') dom = dom.parentNode;
-  if (!dom) return;
-  updateColumnsOnResize(table, dom.firstChild, dom, TOUCH_CELL_MIN_WIDTH, col, width);
-}
-
-/// Commits the dragged width to every cell in the column (mirrors the library's
-/// internal updateColumnWidth, which isn't exported).
-function touchCommitWidth(view: EditorView, cellPos: number, width: number) {
-  const $cell = view.state.doc.resolve(cellPos);
+  if (!$cell) return -1;
   const table = $cell.node(-1);
   const map = TableMap.get(table);
   const start = $cell.start(-1);
   const col = map.colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
+  if (col >= map.width - 1) return -1;
+  return $cell.pos;
+}
+
+/// Column index (0-based) of the cell at [cellPos] within its table.
+function columnIndexOf(view: EditorView, cellPos: number): number {
+  const $cell = view.state.doc.resolve(cellPos);
+  const table = $cell.node(-1);
+  const map = TableMap.get(table);
+  const start = $cell.start(-1);
+  return map.colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
+}
+
+/// Live preview during a drag: writes the widths straight onto the first row's cells
+/// (with table-layout: fixed those govern the whole column) without touching the doc.
+function previewPercents(view: EditorView, cellPos: number, percents: number[]) {
+  const $cell = view.state.doc.resolve(cellPos);
+  const table = $cell.node(-1);
+  const map = TableMap.get(table);
+  const start = $cell.start(-1);
+  for (let col = 0; col < map.width; col++) {
+    const dom = view.nodeDOM(start + map.map[col]) as HTMLElement | null;
+    if (dom && dom.style) dom.style.width = `${percents[col].toFixed(2)}%`;
+  }
+}
+
+/// Commits column percentages to every cell, in one transaction.
+function commitPercents(view: EditorView, cellPos: number, percents: number[]) {
+  const $cell = view.state.doc.resolve(cellPos);
+  const table = $cell.node(-1);
+  const map = TableMap.get(table);
+  const start = $cell.start(-1);
   const tr = view.state.tr;
-  for (let row = 0; row < map.height; row++) {
-    const mapIndex = row * map.width + col;
-    // Skip a cell already handled by the row above (rowspan).
-    if (row && map.map[mapIndex] === map.map[mapIndex - map.width]) continue;
-    const pos = map.map[mapIndex];
-    const attrs = table.nodeAt(pos)!.attrs;
-    const index = attrs.colspan === 1 ? 0 : col - map.colCount(pos);
-    if (attrs.colwidth && attrs.colwidth[index] === width) continue;
-    const colwidth = attrs.colwidth ? attrs.colwidth.slice() : Array(attrs.colspan).fill(0);
-    colwidth[index] = width;
-    tr.setNodeMarkup(start + pos, null, { ...attrs, colwidth });
+  for (let col = 0; col < map.width; col++) {
+    // Integers only: prosemirror-tables' cell parser accepts data-colwidth values
+    // matching /^\d+(,\d+)*$/, so a decimal like "33.33" would be silently dropped
+    // when the note is re-parsed. Rounding costs nothing here because columnPercents
+    // re-normalizes on read (33/33/33 renders as 33.33% each).
+    const value = Math.max(1, Math.round(percents[col]));
+    for (let row = 0; row < map.height; row++) {
+      const mapIndex = row * map.width + col;
+      // Skip a cell already handled by the row above (rowspan).
+      if (row && map.map[mapIndex] === map.map[mapIndex - map.width]) continue;
+      const pos = map.map[mapIndex];
+      const attrs = table.nodeAt(pos)!.attrs;
+      const index = attrs.colspan === 1 ? 0 : col - map.colCount(pos);
+      const colwidth = attrs.colwidth ? attrs.colwidth.slice() : Array(attrs.colspan).fill(0);
+      if (colwidth[index] === value) continue;
+      colwidth[index] = value;
+      tr.setNodeMarkup(start + pos, null, { ...attrs, colwidth });
+    }
   }
   if (tr.docChanged) view.dispatch(tr);
 }
 
-/// Px of horizontal movement before a touch near a column edge counts as a resize
-/// drag rather than a tap. Without this, tapping near an edge to place the cursor
-/// would be swallowed AND would commit an explicit width to the column (which also
-/// flips the table to raw-HTML syncing — see HtmlToMarkdown).
-const TOUCH_DRAG_THRESHOLD = 4;
+/// Applies a drag: trades width between the dragged column and the next one only.
+function percentsAfterDrag(startPercents: number[], col: number, deltaPercent: number): number[] {
+  const next = col + 1;
+  const pair = startPercents[col] + startPercents[next];
+  const lower = COL_MIN_PERCENT;
+  const upper = pair - COL_MIN_PERCENT;
+  const dragged = Math.min(Math.max(startPercents[col] + deltaPercent, lower), upper);
+  const result = startPercents.slice();
+  result[col] = dragged;
+  result[next] = pair - dragged;
+  return result;
+}
 
-function touchColumnResizing() {
-  // Drag bookkeeping lives outside plugin state: the gesture is transient and we
-  // only want one document transaction, committed at touchend.
-  let candidateCell = -1;   // edge touched, not yet moved enough to be a drag
+/// Renders the stored percentages, and marks the cell whose edge is under the pointer
+/// so the CSS can draw the resize handle.
+function columnWidthDecorations(state: EditorState, activeCell: number): DecorationSet {
+  const decos: Decoration[] = [];
+  state.doc.descendants((node: any, pos: number) => {
+    if (node.type !== schema.nodes.table) return true;
+    const map = TableMap.get(node);
+    const percents = columnPercents(node);
+    const start = pos + 1;
+    for (let col = 0; col < map.width; col++) {
+      const cellPos = map.map[col]; // first row governs the column under fixed layout
+      const cell = node.nodeAt(cellPos);
+      if (!cell || cell.attrs.colspan !== 1) continue;
+      decos.push(
+        Decoration.node(start + cellPos, start + cellPos + cell.nodeSize, {
+          style: `width: ${percents[col].toFixed(2)}%`,
+        }),
+      );
+    }
+    if (activeCell > -1 && activeCell > pos && activeCell < pos + node.nodeSize) {
+      const cell = state.doc.nodeAt(activeCell);
+      if (cell) {
+        decos.push(
+          Decoration.node(activeCell, activeCell + cell.nodeSize, { class: 'pm-col-resize-active' }),
+        );
+      }
+    }
+    return false;
+  });
+  return DecorationSet.create(state.doc, decos);
+}
+
+function percentColumnResizing() {
+  // Transient drag bookkeeping — one document transaction, committed on release.
+  let dragCell = -1;
+  let dragCol = 0;
   let dragging = false;
   let startX = 0;
-  let startWidth = 0;
+  let startPercents: number[] = [];
+  let tableWidthPx = 1;
 
-  const reset = () => {
-    candidateCell = -1;
-    dragging = false;
+  const reset = () => { dragCell = -1; dragging = false; };
+
+  /// Shared by mouse and touch: begins tracking a potential drag at the cell edge.
+  const beginDrag = (view: EditorView, cellPos: number, clientX: number): boolean => {
+    const $cell = view.state.doc.resolve(cellPos);
+    const table = $cell.node(-1);
+    if (!table || TableMap.get(table).width < 2) return false;
+    let dom: any = view.nodeDOM($cell.start(-1) + TableMap.get(table).map[0]);
+    while (dom && dom.nodeName !== 'TABLE') dom = dom.parentNode;
+    tableWidthPx = dom?.offsetWidth || view.dom.clientWidth || 1;
+    dragCell = cellPos;
+    dragCol = columnIndexOf(view, cellPos);
+    startPercents = columnPercents(table);
+    startX = clientX;
+    return true;
   };
 
-  return new Plugin({
+  const applyDrag = (view: EditorView, clientX: number): number[] => {
+    const deltaPercent = ((clientX - startX) / tableWidthPx) * 100;
+    return percentsAfterDrag(startPercents, dragCol, deltaPercent);
+  };
+
+  const setActive = (view: EditorView, cellPos: number) => {
+    const current = colResizeKey.getState(view.state)?.activeCell ?? -1;
+    if (current !== cellPos) {
+      view.dispatch(view.state.tr.setMeta(colResizeKey, { activeCell: cellPos }));
+    }
+  };
+
+  return new Plugin<{ activeCell: number }>({
+    key: colResizeKey,
+    state: {
+      init: () => ({ activeCell: -1 }),
+      apply: (tr, prev) => {
+        const meta = tr.getMeta(colResizeKey) as { activeCell: number } | undefined;
+        if (meta) return { activeCell: meta.activeCell };
+        // Keep the highlighted cell's position valid across edits.
+        if (tr.docChanged && prev.activeCell > -1) {
+          return { activeCell: tr.mapping.map(prev.activeCell) };
+        }
+        return prev;
+      },
+    },
     props: {
+      decorations(state) {
+        const pluginState = colResizeKey.getState(state);
+        return columnWidthDecorations(state, pluginState?.activeCell ?? -1);
+      },
       handleDOMEvents: {
+        // ── Mouse ──
+        mousemove(view, event) {
+          if (dragging) return false;
+          const cellPos = view.editable
+            ? edgeCellAt(view, (event as MouseEvent).clientX, (event as MouseEvent).clientY, EDGE_ZONE_MOUSE)
+            : -1;
+          setActive(view, cellPos);
+          return false;
+        },
+        mouseleave(view) {
+          if (!dragging) setActive(view, -1);
+          return false;
+        },
+        mousedown(view, event) {
+          if (!view.editable) return false;
+          const mouse = event as MouseEvent;
+          const cellPos = edgeCellAt(view, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE);
+          if (cellPos < 0) return false;
+          if (!beginDrag(view, cellPos, mouse.clientX)) return false;
+          dragging = true;
+
+          const win = view.dom.ownerDocument.defaultView ?? window;
+          const move = (e: MouseEvent) => {
+            if (!dragging) return;
+            previewPercents(view, dragCell, applyDrag(view, e.clientX));
+          };
+          const finish = (e: MouseEvent) => {
+            win.removeEventListener('mousemove', move);
+            win.removeEventListener('mouseup', finish);
+            if (dragging) {
+              commitPercents(view, dragCell, applyDrag(view, e.clientX));
+              setActive(view, -1);
+              reset();
+            }
+          };
+          win.addEventListener('mousemove', move);
+          win.addEventListener('mouseup', finish);
+          event.preventDefault();
+          return true;
+        },
+
+        // ── Touch ──
         touchstart(view, event) {
           if (!view.editable) return false;
           const touch = (event as TouchEvent).touches[0];
           if (!touch) return false;
-          const cellPos = touchEdgeCell(view, touch.clientX, touch.clientY);
+          const cellPos = edgeCellAt(view, touch.clientX, touch.clientY, EDGE_ZONE_TOUCH);
           if (cellPos < 0) return false;
-          // Only remember the candidate here — the tap still behaves normally
-          // (cursor placement) unless the finger actually moves sideways.
-          candidateCell = cellPos;
+          // Only a candidate for now — a plain tap must still place the cursor, so
+          // nothing is claimed or committed until the finger actually moves.
+          beginDrag(view, cellPos, touch.clientX);
           dragging = false;
-          startX = touch.clientX;
-          startWidth = touchCurrentColWidth(view, cellPos);
           return false;
         },
         touchmove(view, event) {
-          if (candidateCell < 0) return false;
+          if (dragCell < 0) return false;
           const touch = (event as TouchEvent).touches[0];
           if (!touch) return false;
-          const dx = touch.clientX - startX;
           if (!dragging) {
-            if (Math.abs(dx) < TOUCH_DRAG_THRESHOLD) return false;
+            if (Math.abs(touch.clientX - startX) < TOUCH_DRAG_THRESHOLD) return false;
             dragging = true;
-            // Show the handle on the column being dragged, matching the mouse path.
-            view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: candidateCell }));
+            setActive(view, dragCell);
           }
-          touchPreviewWidth(view, candidateCell, Math.max(TOUCH_CELL_MIN_WIDTH, startWidth + dx));
+          previewPercents(view, dragCell, applyDrag(view, touch.clientX));
           // Stops the WebView scrolling / selecting text mid-drag.
           event.preventDefault();
           return true;
         },
         touchend(view, event) {
-          if (candidateCell < 0) return false;
-          if (!dragging) {
-            // A plain tap near the edge — leave it to the normal handlers.
-            reset();
-            return false;
-          }
+          if (dragCell < 0) return false;
+          if (!dragging) { reset(); return false; }
           const touch = (event as TouchEvent).changedTouches[0];
-          const width = touch
-            ? Math.max(TOUCH_CELL_MIN_WIDTH, startWidth + (touch.clientX - startX))
-            : startWidth;
-          touchCommitWidth(view, candidateCell, width);
-          view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: -1 }));
+          commitPercents(view, dragCell, applyDrag(view, touch ? touch.clientX : startX));
+          setActive(view, -1);
           reset();
           return true;
         },
         touchcancel(view) {
-          if (candidateCell < 0) return false;
+          if (dragCell < 0) return false;
           const wasDragging = dragging;
-          if (wasDragging) {
-            view.dispatch(view.state.tr.setMeta(columnResizingPluginKey, { setHandle: -1 }));
-          }
+          if (wasDragging) setActive(view, -1);
           reset();
           return wasDragging;
         },
@@ -762,10 +914,11 @@ function createEditor(): EditorView {
       // handles so they're usable with a finger on Android/iPad, not just a mouse.
       // lastColumnResizable: false — the table is pinned to 100% width (see the CSS),
       // so dragging its right edge has nothing to give.
-      columnResizing({ handleWidth: 8, cellMinWidth: 40, lastColumnResizable: false }),
-      // Touch half of column resizing (Android/iPad) — must come BEFORE tableEditing,
-      // whose own touch/selection handling would otherwise claim the gesture.
-      touchColumnResizing(),
+      // Our own percentage-based, zero-sum resizing (mouse + touch) in place of
+      // prosemirror-tables' pixel-based columnResizing — see the section above.
+      // Must come BEFORE tableEditing, whose selection handling would otherwise
+      // claim the drag gesture.
+      percentColumnResizing(),
       tableEditing(),
 
       // Open links in default browser on click
