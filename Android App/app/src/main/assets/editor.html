@@ -505,11 +505,27 @@
       opacity: 1;
     }
   }
-  /* The glyph is what rotates — see the transform note on .pm-heading-arrow. */
+  /* Drawn from an SVG mask rather than a text glyph. A glyph carries its own side
+     bearings, so it never sits centred in its box, and by how much differs between
+     the Mac's and Android's system fonts — which is why the chevron looked off
+     centre inside the tap circle. A mask is centred by the browser and takes its
+     colour from the element, so it lands right on both, collapsed or expanded.
+     This is what rotates, not the box — see the transform note on .pm-heading-arrow. */
   .ProseMirror .pm-heading-arrow::after {
-    content: '›';
+    content: '';
     display: block;
-    line-height: 1;
+    width: 100%;
+    height: 100%;
+    background: currentColor;
+    --pm-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E");
+    -webkit-mask-image: var(--pm-chevron);
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    -webkit-mask-size: 0.6em 0.6em;
+    mask-image: var(--pm-chevron);
+    mask-repeat: no-repeat;
+    mask-position: center;
+    mask-size: 0.6em 0.6em;
     transform: rotate(90deg); /* expanded: chevron points down */
     transition: transform 0.15s ease;
   }
