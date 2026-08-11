@@ -238,11 +238,22 @@ function writeEditorHtml(outDir) {
        margin-top) so the gap after the title is guaranteed regardless of what
        kind of node follows it. */
     margin-bottom: 0.75em;
+    /* Anchors the placeholder below. */
+    position: relative;
   }
+  /* Placeholder for an untitled note. Taken out of flow (absolute) so it doesn't
+     occupy the line: an in-flow ::before pushes the caret to the far side of the
+     word, which is where a new note's cursor landed on Android before this. The
+     caret now sits at the start of the line with the placeholder drawn behind it,
+     the way a text field's placeholder behaves. */
   .ProseMirror .pm-title.pm-title-empty::before {
     content: 'Title';
+    position: absolute;
+    left: 0;
+    top: 0;
     color: var(--color-secondary);
     pointer-events: none;
+    user-select: none;
   }
 
   /* Headings — h1 doubles as the "Title" style choice in the toolbar menu, so it

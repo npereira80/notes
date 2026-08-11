@@ -3,6 +3,7 @@ package com.ikuteam.notestn.ui.editor
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.compose.runtime.getValue
@@ -142,7 +143,15 @@ class EditorCoordinator {
         val wv = webView ?: return
         wv.post {
             wv.requestFocus()
-            wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.focus()", null)
+            wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.focus()") {
+                // Chromium only raises the keyboard by itself when the focus came from
+                // a real tap. Entering edit mode, and opening a brand-new note, focus
+                // the editor programmatically, so the IME has to be asked for — the
+                // callback runs once the page has actually taken focus, which is when
+                // showSoftInput has an editable target to attach to.
+                val imm = wv.context.getSystemService(InputMethodManager::class.java)
+                imm?.showSoftInput(wv, InputMethodManager.SHOW_IMPLICIT)
+            }
         }
     }
 
