@@ -1,7 +1,10 @@
 import SwiftUI
 import WebKit
 import AppKit
-import QuickLook
+// QuickLookUI, not QuickLook: on macOS the panel API (QLPreviewPanel,
+// QLPreviewPanelDataSource, QLPreviewItem) ships in QuickLookUI, part of the Quartz
+// umbrella. QuickLook alone is the iOS controller API and leaves those undefined here.
+import QuickLookUI
 import UniformTypeIdentifiers
 
 // MARK: - Selection State (mirrors JS SelectionState)
