@@ -743,9 +743,27 @@ struct NoteEditorView: View {
         }
     }
 
+    /// True for anything the system recognises as an image (PNG, JPEG, HEIC, GIF, TIFF
+    /// and the rest), read from the file's own content type where possible and from its
+    /// extension otherwise.
+    private func isImageFile(_ url: URL) -> Bool {
+        if let type = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType {
+            return type.conforms(to: .image)
+        }
+        return UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false
+    }
+
     /// Copies the file into the resources directory, records it as a Resource so sync
     /// picks it up, and inserts the attachment card.
     private func attachFile(at url: URL) {
+        // An image picked with the paperclip goes in as an image rather than a file
+        // card: it's the same resource either way, and seeing the picture is more
+        // useful than a card naming it.
+        if isImageFile(url) {
+            insertImageFile(at: url)
+            return
+        }
+
         let resourceId = Note.generateId()
         guard let resourcesDir = DatabaseManager.shared.resourcesDirectory else { return }
 
@@ -785,7 +803,13 @@ struct NoteEditorView: View {
 
     private func handleImagePick(result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
+        insertImageFile(at: url)
+    }
 
+    /// Copies an image into the resources directory, records it as a Resource so sync
+    /// picks it up, and inserts it into the note. Shared by the image button and by the
+    /// paperclip when what was picked turns out to be an image.
+    private func insertImageFile(at url: URL) {
         let resourceId = Note.generateId()
         guard let resourcesDir = DatabaseManager.shared.resourcesDirectory else { return }
 
