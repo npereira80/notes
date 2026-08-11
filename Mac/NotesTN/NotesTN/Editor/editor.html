@@ -274,10 +274,10 @@
   .ProseMirror ul[data-is-checklist] li input[type="checkbox"] {
     flex-shrink: 0;
     cursor: pointer;
-    /* 17px — 15% down from the 20px it started at. The checkmark below is a
+    /* 18px, down from the 20px it started at. The checkmark below is a
        percentage clip-path, so it scales with the circle on its own. */
-    width: 17px;
-    height: 17px;
+    width: 18px;
+    height: 18px;
     /* appearance: none — a bare native checkbox otherwise ignores border/background
        color entirely and renders the OS's own control chrome (a light-mode-looking
        white box, system-accent blue when checked), which is why it didn't follow
@@ -286,7 +286,7 @@
     -webkit-appearance: none;
     /* Small top margin to sit the circle roughly centered on the first text line
        (may need a pixel of adjustment across font sizes). Raised from 2px along
-       with the 20px-to-17px size change, so the circle's center stays put. */
+       with the 20px-to-18px size change, so the circle's center stays put. */
     margin: 3px 0 0 0;
     border: 1.5px solid var(--color-checkbox-border);
     /* Round (circular) checkbox — a full 50% radius. */
