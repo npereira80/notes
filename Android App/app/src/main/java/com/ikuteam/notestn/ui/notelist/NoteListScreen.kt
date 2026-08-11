@@ -47,7 +47,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
-import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -618,12 +618,12 @@ private fun FloatingSearchAndAddBar(
             modifier = Modifier.weight(1f),
         )
         if (showAddButton) {
-            // The platform's own small FAB, the same one the editor uses for Edit note,
+            // The platform's own FAB, the same one the editor uses for Edit note,
             // rather than a hand-built button: same size, shape, elevation and ripple
             // as every other FAB in the app, and it follows the platform if that
             // changes. It replaced a custom Box that existed only to sit a blurred
             // backdrop behind the fill, which the solid FAB no longer needs.
-            SmallFloatingActionButton(
+            FloatingActionButton(
                 onClick = onNewNote,
                 containerColor = NotesYellowVivid,
                 contentColor = Color.Black,
@@ -655,14 +655,14 @@ private fun FloatingSearchField(
         }
     }
 
-    // Matches the small FAB next to it exactly — 40dp tall, 12dp corners, same
-    // elevation — so the two read as one floating control group. `modifier` already
-    // carries `weight(1f)` from the caller's Row, so only height needs fixing here.
+    // Matches the FAB next to it exactly — 56dp tall, 16dp corners, same elevation —
+    // so the two read as one floating control group. `modifier` already carries
+    // `weight(1f)` from the caller's Row, so only height needs fixing here.
     // Solid (opaque) fill; the FAB is solid too.
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
-            .height(40.dp)
+            .height(56.dp)
             .shadow(3.dp, shape)
             .clip(shape)
             .background(background)
