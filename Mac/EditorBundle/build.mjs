@@ -322,8 +322,10 @@ function writeEditorHtml(outDir) {
   .ProseMirror ul[data-is-checklist] li input[type="checkbox"] {
     flex-shrink: 0;
     cursor: pointer;
-    width: 20px;
-    height: 20px;
+    /* 17px — 15% down from the 20px it started at. The checkmark below is a
+       percentage clip-path, so it scales with the circle on its own. */
+    width: 17px;
+    height: 17px;
     /* appearance: none — a bare native checkbox otherwise ignores border/background
        color entirely and renders the OS's own control chrome (a light-mode-looking
        white box, system-accent blue when checked), which is why it didn't follow
@@ -331,8 +333,9 @@ function writeEditorHtml(outDir) {
     appearance: none;
     -webkit-appearance: none;
     /* Small top margin to sit the circle roughly centered on the first text line
-       (may need a pixel of adjustment across font sizes). */
-    margin: 2px 0 0 0;
+       (may need a pixel of adjustment across font sizes). Raised from 2px along
+       with the 20px-to-17px size change, so the circle's center stays put. */
+    margin: 3px 0 0 0;
     border: 1.5px solid var(--color-checkbox-border);
     /* Round (circular) checkbox — a full 50% radius. */
     border-radius: 50%;
