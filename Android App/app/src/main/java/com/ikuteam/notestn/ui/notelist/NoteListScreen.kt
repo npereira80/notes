@@ -839,32 +839,31 @@ private fun NoteRow(
                 )
             }
         }
-        // align(TopEnd): a DropdownMenu takes no space of its own, so it anchors to
-        // wherever it sits in the Box — top-start by default, which put the menu off
-        // at the row's left edge. Anchoring it to the end opens it on the right.
-        DropdownMenu(
-            expanded = showMenu,
-            onDismissRequest = { showMenu = false },
-            modifier = Modifier.align(Alignment.TopEnd),
-        ) {
-            if (isTrash) {
-                DropdownMenuItem(text = { Text("Restore") }, onClick = {
-                    showMenu = false
-                    onRestore()
-                })
-                DropdownMenuItem(text = { Text("Delete Permanently") }, onClick = {
-                    showMenu = false
-                    confirmDelete = true
-                })
-            } else {
-                DropdownMenuItem(text = { Text(if (note.isPinned) "Unpin Note" else "Pin Note") }, onClick = {
-                    showMenu = false
-                    onTogglePin()
-                })
-                DropdownMenuItem(text = { Text("Delete Note") }, onClick = {
-                    showMenu = false
-                    confirmDelete = true
-                })
+        // The menu is anchored to this zero-size Box, so putting the BOX at the row's
+        // top-end is what opens the menu on the right. (A modifier passed to
+        // DropdownMenu itself styles the popup's content, not its anchor — so
+        // Modifier.align there has no effect on where it appears.)
+        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                if (isTrash) {
+                    DropdownMenuItem(text = { Text("Restore") }, onClick = {
+                        showMenu = false
+                        onRestore()
+                    })
+                    DropdownMenuItem(text = { Text("Delete Permanently") }, onClick = {
+                        showMenu = false
+                        confirmDelete = true
+                    })
+                } else {
+                    DropdownMenuItem(text = { Text(if (note.isPinned) "Unpin Note" else "Pin Note") }, onClick = {
+                        showMenu = false
+                        onTogglePin()
+                    })
+                    DropdownMenuItem(text = { Text("Delete Note") }, onClick = {
+                        showMenu = false
+                        confirmDelete = true
+                    })
+                }
             }
         }
     }
@@ -915,22 +914,19 @@ private fun TrashedFolderRow(
         ) {
             Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
         }
-        // align(TopEnd): a DropdownMenu takes no space of its own, so it anchors to
-        // wherever it sits in the Box — top-start by default, which put the menu off
-        // at the row's left edge. Anchoring it to the end opens it on the right.
-        DropdownMenu(
-            expanded = showMenu,
-            onDismissRequest = { showMenu = false },
-            modifier = Modifier.align(Alignment.TopEnd),
-        ) {
-            DropdownMenuItem(text = { Text("Restore") }, onClick = {
-                showMenu = false
-                onRestore()
-            })
-            DropdownMenuItem(text = { Text("Delete Permanently") }, onClick = {
-                showMenu = false
-                confirmDelete = true
-            })
+        // Anchored to a top-end Box so it opens on the right — see the note on the
+        // note-row menu above.
+        Box(modifier = Modifier.align(Alignment.TopEnd)) {
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenuItem(text = { Text("Restore") }, onClick = {
+                    showMenu = false
+                    onRestore()
+                })
+                DropdownMenuItem(text = { Text("Delete Permanently") }, onClick = {
+                    showMenu = false
+                    confirmDelete = true
+                })
+            }
         }
     }
 
