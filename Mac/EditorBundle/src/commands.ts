@@ -67,11 +67,46 @@ const setHeading: CommandFn = (view, level?: number) =>
 
 // Toggles the current block(s) between a code block and a paragraph, so the toolbar
 // code button turns the box on and off.
+//
+// When the selection covers several blocks (e.g. a pasted list of URLs, each its own
+// paragraph, or lines that were marked as inline code), they're merged into ONE code
+// block with the lines joined by newlines — plain setBlockType would instead turn
+// each paragraph into its own separate box. The code_block schema declares
+// `marks: ''`, so any inline code/bold/etc. marks are dropped in the process, which
+// is exactly what's wanted when converting inline-code lines into a real block.
 const setCodeBlock: CommandFn = (view) => {
   const { state, dispatch } = view;
-  const alreadyCode = state.selection.$from.parent.type === schema.nodes.code_block;
-  const target = alreadyCode ? schema.nodes.paragraph : schema.nodes.code_block;
-  return setBlockType(target)(state, dispatch, view);
+  const { $from, $to } = state.selection;
+
+  // Already a code block → back to a paragraph.
+  if ($from.parent.type === schema.nodes.code_block) {
+    return setBlockType(schema.nodes.paragraph)(state, dispatch, view);
+  }
+
+  // Collect the text of every text block the selection touches.
+  const lines: string[] = [];
+  state.doc.nodesBetween(state.selection.from, state.selection.to, (node) => {
+    if (node.isTextblock) {
+      lines.push(node.textContent);
+      return false;
+    }
+    return true;
+  });
+
+  // Single block (or nothing selected) — the simple in-place conversion is enough.
+  if (lines.length <= 1) {
+    return setBlockType(schema.nodes.code_block)(state, dispatch, view);
+  }
+
+  const from = $from.before($from.depth);
+  const to = $to.after($to.depth);
+  const text = lines.join('\n');
+  const codeBlock = schema.nodes.code_block.create(
+    null,
+    text ? schema.text(text) : undefined,
+  );
+  if (dispatch) dispatch(state.tr.replaceRangeWith(from, to, codeBlock));
+  return true;
 };
 
 const toggleBlockquote: CommandFn = (view) => {

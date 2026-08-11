@@ -204,7 +204,12 @@
     background: var(--color-code-bg);
     border-radius: 6px;
     padding: 12px 16px;
-    overflow-x: auto;
+    /* pre-wrap (not the <pre> default of "pre") so long lines — pasted URLs are the
+       common case — wrap inside the box and grow its height, instead of running off
+       the side behind a horizontal scrollbar. */
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: break-word;
   }
   .ProseMirror pre code {
     background: none;

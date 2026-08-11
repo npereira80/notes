@@ -14790,9 +14790,30 @@
   var setHeading = (view, level) => setBlockType2(schema_default.nodes.heading, { level: level ?? 1 })(view.state, view.dispatch, view);
   var setCodeBlock = (view) => {
     const { state, dispatch } = view;
-    const alreadyCode = state.selection.$from.parent.type === schema_default.nodes.code_block;
-    const target = alreadyCode ? schema_default.nodes.paragraph : schema_default.nodes.code_block;
-    return setBlockType2(target)(state, dispatch, view);
+    const { $from, $to } = state.selection;
+    if ($from.parent.type === schema_default.nodes.code_block) {
+      return setBlockType2(schema_default.nodes.paragraph)(state, dispatch, view);
+    }
+    const lines = [];
+    state.doc.nodesBetween(state.selection.from, state.selection.to, (node) => {
+      if (node.isTextblock) {
+        lines.push(node.textContent);
+        return false;
+      }
+      return true;
+    });
+    if (lines.length <= 1) {
+      return setBlockType2(schema_default.nodes.code_block)(state, dispatch, view);
+    }
+    const from2 = $from.before($from.depth);
+    const to = $to.after($to.depth);
+    const text = lines.join("\n");
+    const codeBlock = schema_default.nodes.code_block.create(
+      null,
+      text ? schema_default.text(text) : void 0
+    );
+    if (dispatch) dispatch(state.tr.replaceRangeWith(from2, to, codeBlock));
+    return true;
   };
   var toggleBlockquote = (view) => {
     const { state, dispatch } = view;
