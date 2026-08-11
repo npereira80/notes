@@ -15066,7 +15066,12 @@
   };
   var setParagraph = (view) => setBlockType2(schema_default.nodes.paragraph)(view.state, view.dispatch, view);
   var setHeading = (view, level) => setBlockType2(schema_default.nodes.heading, { level: level ?? 1 })(view.state, view.dispatch, view);
-  var setCodeBlock = (view) => setBlockType2(schema_default.nodes.code_block)(view.state, view.dispatch, view);
+  var setCodeBlock = (view) => {
+    const { state, dispatch } = view;
+    const alreadyCode = state.selection.$from.parent.type === schema_default.nodes.code_block;
+    const target = alreadyCode ? schema_default.nodes.paragraph : schema_default.nodes.code_block;
+    return setBlockType2(target)(state, dispatch, view);
+  };
   var toggleBlockquote = (view) => {
     const { state, dispatch } = view;
     const { $from } = state.selection;

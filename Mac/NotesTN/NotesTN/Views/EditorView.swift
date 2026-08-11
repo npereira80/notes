@@ -780,8 +780,10 @@ struct EditorToolbarView: View {
             FormatToggleButton(icon: "highlighter", tooltip: "Highlight", isActive: coordinator.selectionState.highlight) {
                 coordinator.execCommand("highlight")
             }
-            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", tooltip: "Inline Code (⌘`)", isActive: coordinator.selectionState.code) {
-                coordinator.execCommand("code")
+            // Code block (the box). Inline code ("Monospaced") is still in the text
+            // style menu above.
+            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", tooltip: "Code Block", isActive: coordinator.selectionState.inCode) {
+                coordinator.execCommand("codeBlock")
             }
 
             Divider()

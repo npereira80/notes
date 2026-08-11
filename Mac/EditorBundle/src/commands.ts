@@ -65,8 +65,14 @@ const setParagraph: CommandFn = (view) =>
 const setHeading: CommandFn = (view, level?: number) =>
   setBlockType(schema.nodes.heading, { level: level ?? 1 })(view.state, view.dispatch, view);
 
-const setCodeBlock: CommandFn = (view) =>
-  setBlockType(schema.nodes.code_block)(view.state, view.dispatch, view);
+// Toggles the current block(s) between a code block and a paragraph, so the toolbar
+// code button turns the box on and off.
+const setCodeBlock: CommandFn = (view) => {
+  const { state, dispatch } = view;
+  const alreadyCode = state.selection.$from.parent.type === schema.nodes.code_block;
+  const target = alreadyCode ? schema.nodes.paragraph : schema.nodes.code_block;
+  return setBlockType(target)(state, dispatch, view);
+};
 
 const toggleBlockquote: CommandFn = (view) => {
   const { state, dispatch } = view;

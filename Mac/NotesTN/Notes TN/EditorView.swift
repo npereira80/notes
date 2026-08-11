@@ -947,8 +947,10 @@ struct EditorToolbarView: View {
             FormatToggleButton(icon: "highlighter", isActive: coordinator.selectionState.highlight) {
                 coordinator.execCommand("highlight")
             }
-            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", isActive: coordinator.selectionState.code) {
-                coordinator.execCommand("code")
+            // Code block (the box). Inline code ("Monospaced") is still in the text
+            // style menu.
+            FormatToggleButton(icon: "chevron.left.forwardslash.chevron.right", isActive: coordinator.selectionState.inCode) {
+                coordinator.execCommand("codeBlock")
             }
 
             Divider().frame(height: 20)

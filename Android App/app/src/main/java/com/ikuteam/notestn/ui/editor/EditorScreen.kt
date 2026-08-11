@@ -603,7 +603,8 @@ private fun EditorToolbar(
         ToolbarToggleButton(Icons.Outlined.FormatItalic, "Italic", s.italic) { coordinator.execCommand("italic") }
         ToolbarToggleButton(Icons.Filled.FormatStrikethrough, "Strikethrough", s.strikethrough) { coordinator.execCommand("strikethrough") }
         ToolbarToggleButton(Icons.Filled.BorderColor, "Highlight", s.highlight) { coordinator.execCommand("highlight") }
-        ToolbarToggleButton(Icons.Filled.Code, "Inline Code", s.code) { coordinator.execCommand("code") }
+        // Code block (the box). Inline code ("Monospaced") is still in the text style menu.
+        ToolbarToggleButton(Icons.Filled.Code, "Code Block", s.inCode) { coordinator.execCommand("codeBlock") }
 
         ToolbarDivider()
         ToolbarToggleButton(Icons.Filled.FormatListBulleted, "Bullet List", s.inBulletList) { coordinator.execCommand("bulletList") }
