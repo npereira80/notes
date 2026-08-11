@@ -640,6 +640,42 @@ final class DatabaseManager {
         }
     }
 
+    /// Records that a resource's bytes changed on disk (the user edited the file in
+    /// its own app): update the stored size and flag it dirty so the next sync
+    /// re-uploads the blob. Deliberately narrow — saveResource would rewrite the whole
+    /// row and reset its synced flag.
+    func markResourceEdited(id: String, fileSize: Int) {
+        withStatement("UPDATE resources SET is_dirty = 1, file_size = ?, updated_time = ? WHERE id = ?") { stmt in
+            sqlite3_bind_int64(stmt, 1, Int64(fileSize))
+            bind(stmt, 2, Date())
+            bind(stmt, 3, id)
+            sqlite3_step(stmt)
+        }
+    }
+
+    /// Updates the size shown on every attachment card pointing at this resource, so a
+    /// card doesn't keep advertising the old size after the file was edited. Notes are
+    /// marked dirty so the corrected body syncs too.
+    func updateAttachmentCardSizes(resourceId: String, fileSize: Int) {
+        let marker = "data-resource-id=\"\(resourceId)\""
+        for note in fetchNotes() where note.body.contains(marker) {
+            guard let updated = Self.replacingCardSize(in: note.body, resourceId: resourceId, size: fileSize),
+                  updated != note.body else { continue }
+            var edited = note
+            edited.body = updated
+            edited.updatedTime = Date()
+            saveNote(edited, dirty: true, synced: noteSyncedFlag(id: note.id))
+        }
+    }
+
+    /// Rewrites data-size on the attachment card for [resourceId] within [html].
+    private static func replacingCardSize(in html: String, resourceId: String, size: Int) -> String? {
+        let pattern = "(<div class=\"pm-attachment\"[^>]*data-resource-id=\"\(resourceId)\"[^>]*data-size=\")[0-9]+(\")"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        return regex.stringByReplacingMatches(in: html, range: range, withTemplate: "$1\(size)$2")
+    }
+
     func resourceSyncedFlag(id: String) -> Bool {
         var result = false
         withStatement("SELECT is_synced FROM resources WHERE id = ?") { stmt in

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paths the FileProvider is allowed to share (see the provider in AndroidManifest.xml).
+  Only the attachments directory is exposed: opening an attachment hands another app a
+  content:// URI for that one file, the way Gmail does, rather than exposing app
+  storage or resorting to a file:// URI (which Android forbids across apps).
+  Must match DatabaseManager.resourcesDirectory — filesDir/resources.
+-->
+<paths>
+    <files-path name="attachments" path="resources/" />
+</paths>

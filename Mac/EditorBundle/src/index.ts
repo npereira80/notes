@@ -50,7 +50,7 @@ interface NativeMessage {
   // matches and `index` the 1-based current match (0 when there are none).
   // openAttachment carries a resource id in `resourceId`; native resolves it to the
   // local file and opens it in the platform's own previewer.
-  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged' | 'findResult' | 'openAttachment';
+  type: 'contentChanged' | 'selectionChanged' | 'imageRequested' | 'ready' | 'log' | 'openUrl' | 'openMaps' | 'focusChanged' | 'findResult' | 'openAttachment' | 'editAttachment';
   title?: string;
   html?: string;
   selectionState?: SelectionState;
@@ -1052,6 +1052,9 @@ function createEditor(): EditorView {
   let lastTitle = '';
   let lastHTML = '';
   let selectionDebounce: ReturnType<typeof setTimeout> | null = null;
+  // Pending single-click preview of an attachment, cancelled if a double click
+  // follows (see the attachment plugin below).
+  let attachmentClickTimer: ReturnType<typeof setTimeout> | null = null;
 
   const notifyContent = (state: EditorState) => {
     const { title, body } = stateToParts(state);
@@ -1119,9 +1122,17 @@ function createEditor(): EditorView {
         },
       }),
 
-      // Attachment cards: a click opens the file in the platform's own previewer
-      // (QuickLook on Mac/iOS, the default app on Android). Same edit-mode rule as
-      // links on Android — while editing, a tap selects the card instead of opening.
+      // Attachment cards:
+      //   single click  → preview the file (QuickLook on Mac/iOS, the default app on
+      //                   Android), which is all mobile does with attachments;
+      //   double click  → open it in its default app to edit (desktop only — the Mac
+      //                   client then watches the file and syncs any changes back).
+      // The single-click preview waits briefly so a double click doesn't also fire it.
+      // Two things keep that from being a race: the second click of a double click
+      // carries detail > 1, so it cancels the pending preview however late it lands,
+      // and the Mac side closes the preview panel when the edit message arrives. Same
+      // edit-mode rule as links on Android: while editing, a tap selects the card
+      // instead of opening it.
       new Plugin({
         props: {
           handleDOMEvents: {
@@ -1132,7 +1143,33 @@ function createEditor(): EditorView {
               const resourceId = card.getAttribute('data-resource-id') || '';
               if (!resourceId) return false;
               event.preventDefault();
-              postToNative({ type: 'openAttachment', resourceId });
+              if (attachmentClickTimer !== null) {
+                clearTimeout(attachmentClickTimer);
+                attachmentClickTimer = null;
+              }
+              // Part of a double click (the browser counts clicks within the system's
+              // double-click interval, however long the user has set that to) — leave
+              // it to the dblclick handler.
+              if (event.detail > 1) return true;
+              attachmentClickTimer = setTimeout(() => {
+                attachmentClickTimer = null;
+                postToNative({ type: 'openAttachment', resourceId });
+              }, 250);
+              return true;
+            },
+            dblclick(view, event) {
+              const card = (event.target as HTMLElement).closest('.pm-attachment') as HTMLElement | null;
+              if (!card) return false;
+              if (isAndroid && editable) return false;
+              const resourceId = card.getAttribute('data-resource-id') || '';
+              if (!resourceId) return false;
+              // Cancel the pending preview from the first click of this double click.
+              if (attachmentClickTimer !== null) {
+                clearTimeout(attachmentClickTimer);
+                attachmentClickTimer = null;
+              }
+              event.preventDefault();
+              postToNative({ type: 'editAttachment', resourceId });
               return true;
             },
           },

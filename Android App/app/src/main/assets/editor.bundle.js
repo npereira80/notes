@@ -15851,6 +15851,7 @@
     let lastTitle = "";
     let lastHTML = "";
     let selectionDebounce = null;
+    let attachmentClickTimer = null;
     const notifyContent = (state2) => {
       const { title, body } = stateToParts(state2);
       if (title !== lastTitle || body !== lastHTML) {
@@ -15906,9 +15907,17 @@
             }
           }
         }),
-        // Attachment cards: a click opens the file in the platform's own previewer
-        // (QuickLook on Mac/iOS, the default app on Android). Same edit-mode rule as
-        // links on Android — while editing, a tap selects the card instead of opening.
+        // Attachment cards:
+        //   single click  → preview the file (QuickLook on Mac/iOS, the default app on
+        //                   Android), which is all mobile does with attachments;
+        //   double click  → open it in its default app to edit (desktop only — the Mac
+        //                   client then watches the file and syncs any changes back).
+        // The single-click preview waits briefly so a double click doesn't also fire it.
+        // Two things keep that from being a race: the second click of a double click
+        // carries detail > 1, so it cancels the pending preview however late it lands,
+        // and the Mac side closes the preview panel when the edit message arrives. Same
+        // edit-mode rule as links on Android: while editing, a tap selects the card
+        // instead of opening it.
         new Plugin({
           props: {
             handleDOMEvents: {
@@ -15919,7 +15928,29 @@
                 const resourceId = card.getAttribute("data-resource-id") || "";
                 if (!resourceId) return false;
                 event.preventDefault();
-                postToNative({ type: "openAttachment", resourceId });
+                if (attachmentClickTimer !== null) {
+                  clearTimeout(attachmentClickTimer);
+                  attachmentClickTimer = null;
+                }
+                if (event.detail > 1) return true;
+                attachmentClickTimer = setTimeout(() => {
+                  attachmentClickTimer = null;
+                  postToNative({ type: "openAttachment", resourceId });
+                }, 250);
+                return true;
+              },
+              dblclick(view2, event) {
+                const card = event.target.closest(".pm-attachment");
+                if (!card) return false;
+                if (isAndroid && editable) return false;
+                const resourceId = card.getAttribute("data-resource-id") || "";
+                if (!resourceId) return false;
+                if (attachmentClickTimer !== null) {
+                  clearTimeout(attachmentClickTimer);
+                  attachmentClickTimer = null;
+                }
+                event.preventDefault();
+                postToNative({ type: "editAttachment", resourceId });
                 return true;
               }
             }

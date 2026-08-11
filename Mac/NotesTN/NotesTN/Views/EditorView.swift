@@ -116,6 +116,19 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                 AttachmentPreview.show(url: url)
             }
 
+        case "editAttachment":
+            // Double-click — open the file in its own app so it can be edited, and
+            // start watching it so the change syncs back.
+            if let resourceId = body["resourceId"] as? String,
+               let url = DatabaseManager.shared.resourceLocalFileURL(id: resourceId),
+               FileManager.default.fileExists(atPath: url.path) {
+                // The first click of the double click may already have opened the
+                // preview panel; close it so it isn't left behind the editing app.
+                AttachmentPreview.hide()
+                AttachmentEditWatcher.shared.watch(resourceId: resourceId, url: url)
+                NSWorkspace.shared.open(url)
+            }
+
         case "findResult":
             onFindResult?(body["count"] as? Int ?? 0, body["index"] as? Int ?? 0)
 
@@ -821,6 +834,97 @@ struct NoteEditorView: View {
     }
 }
 
+// MARK: - Attachment editing (watch for changes made in other apps)
+
+/// Watches attachment files that were opened for editing, so a change made in Word (or
+/// any other app) gets re-uploaded to Joplin Cloud instead of sitting in the local copy
+/// forever.
+///
+/// Detection compares modification date + size whenever the app comes back to the
+/// foreground, rather than watching the file descriptor. Editors like Word save
+/// atomically — writing a temp file and renaming it over the original — which replaces
+/// the inode and makes a descriptor watch miss the change completely. Returning to the
+/// app after saving is also exactly when the note should catch up.
+///
+/// Mac only: it lives in this file (rather than Sync/, which is shared with the iOS
+/// target) because it depends on AppKit, and because editing attachments is a desktop
+/// feature — mobile is preview-only.
+///
+/// Known limitation: tracking is in-memory and starts at the double click, so it only
+/// covers files opened for editing in the current app session. Edit an attachment and
+/// quit Notes TN before switching back to it, or reopen the file later from the other
+/// app's Recents, and the change stays on disk and is never uploaded, while the
+/// resource still looks synced. Closing that gap needs a check of every local resource
+/// file against its recorded size at launch, which is a bigger change than this one.
+@MainActor
+final class AttachmentEditWatcher {
+    static let shared = AttachmentEditWatcher()
+
+    /// Posted once an edited attachment has been flagged for upload, so AppState can
+    /// start a sync — it owns the sync engine, this type deliberately doesn't.
+    static let didDetectEdit = Notification.Name("AttachmentEditWatcherDidDetectEdit")
+
+    private struct Snapshot {
+        let url: URL
+        var modified: Date?
+        var size: Int
+    }
+
+    private var watched: [String: Snapshot] = [:]   // resourceId → last known state
+
+    private init() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AttachmentEditWatcher.shared.checkForEdits() }
+        }
+    }
+
+    /// Starts tracking a resource's file, recording its current state so a later change
+    /// can be spotted. Called when an attachment is opened for editing.
+    func watch(resourceId: String, url: URL) {
+        watched[resourceId] = Snapshot(
+            url: url,
+            modified: Self.modificationDate(of: url),
+            size: Self.fileSize(of: url)
+        )
+    }
+
+    /// Re-checks every tracked file; anything that changed is flagged for upload.
+    func checkForEdits() {
+        guard !watched.isEmpty else { return }
+        var didChange = false
+
+        for (resourceId, snapshot) in watched {
+            // A missing file is left alone — dropping the resource over a local mishap
+            // would delete it from every other device too.
+            guard FileManager.default.fileExists(atPath: snapshot.url.path) else { continue }
+            let modified = Self.modificationDate(of: snapshot.url)
+            let size = Self.fileSize(of: snapshot.url)
+            guard modified != snapshot.modified || size != snapshot.size else { continue }
+
+            DatabaseManager.shared.markResourceEdited(id: resourceId, fileSize: size)
+            DatabaseManager.shared.updateAttachmentCardSizes(resourceId: resourceId, fileSize: size)
+            watched[resourceId] = Snapshot(url: snapshot.url, modified: modified, size: size)
+            didChange = true
+        }
+
+        if didChange {
+            NotificationCenter.default.post(name: Self.didDetectEdit, object: nil)
+        }
+    }
+
+    private static func modificationDate(of url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    private static func fileSize(of url: URL) -> Int {
+        (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    }
+}
+
 // MARK: - Attachment preview (QuickLook)
 
 /// Presents an attachment in QuickLook — the same preview you get from Space in
@@ -838,6 +942,14 @@ final class AttachmentPreview: NSObject, QLPreviewPanelDataSource {
         panel.dataSource = shared
         panel.reloadData()
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Closes the panel if it's showing one of our attachments — used when a double
+    /// click turns a preview into an edit.
+    static func hide() {
+        guard shared.url != nil, let panel = QLPreviewPanel.shared(), panel.isVisible else { return }
+        shared.url = nil
+        panel.orderOut(nil)
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { url == nil ? 0 : 1 }

@@ -34,4 +34,6 @@ data class EditorBridgeMessage(
     // findResult: total matches + 1-based current match index (0 = none).
     val count: Int? = null,
     val index: Int? = null,
+    // openAttachment / editAttachment: which resource's file to open.
+    val resourceId: String? = null,
 )

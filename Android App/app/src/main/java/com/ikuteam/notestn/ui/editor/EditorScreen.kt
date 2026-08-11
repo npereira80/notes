@@ -165,6 +165,11 @@ fun EditorScreen(
     var confirmPermanentDelete by remember(note.id) { mutableStateOf(false) }
     // Set when a detected address is tapped — drives the Google Maps / Waze chooser.
     var mapsAddress by remember(note.id) { mutableStateOf<String?>(null) }
+    // True when an attachment couldn't be opened (no app installed for that type, or
+    // the file hasn't finished syncing to this device yet).
+    var attachmentError by remember(note.id) { mutableStateOf(false) }
+    // Guards against opening the same attachment twice from one tap — see onOpenAttachment.
+    var isOpeningAttachment by remember(note.id) { mutableStateOf(false) }
 
     // In-note find (the search icon next to undo/redo). Highlights matches in the
     // editor and steps through them; independent of the global note-list search.
@@ -240,6 +245,20 @@ fun EditorScreen(
         coordinator.onFindResult = { count, index ->
             findCount = count
             findCurrent = index
+        }
+        coordinator.onOpenAttachment = { resourceId ->
+            // isOpeningAttachment keeps a double tap (the editor sends the preview and
+            // the edit message for one card) from launching the viewer twice.
+            if (!isOpeningAttachment) {
+                isOpeningAttachment = true
+                scope.launch {
+                    val intent = withContext(Dispatchers.IO) { attachmentViewIntent(context, resourceId) }
+                    // Back on the main thread: starting an activity is main-thread work.
+                    val opened = intent != null && runCatching { context.startActivity(intent) }.isSuccess
+                    if (!opened) attachmentError = true
+                    isOpeningAttachment = false
+                }
+            }
         }
         coordinator.onFocusChanged = { focused ->
             viewModel.isEditorFocused = focused
@@ -482,6 +501,15 @@ fun EditorScreen(
         MarkdownSourceDialog(
             markdown = remember(coordinator.lastKnownBody) { HtmlToMarkdown.convert(coordinator.lastKnownBody) },
             onDismiss = { showMarkdownSource = false },
+        )
+    }
+
+    if (attachmentError) {
+        AlertDialog(
+            onDismissRequest = { attachmentError = false },
+            title = { Text("Can't open attachment") },
+            text = { Text("No app on this device can open this file, or it hasn't finished syncing yet.") },
+            confirmButton = { TextButton(onClick = { attachmentError = false }) { Text("OK") } },
         )
     }
 
@@ -873,6 +901,40 @@ private fun LinkInputDialog(
         confirmButton = { TextButton(onClick = { onConfirm(text.trim()) }) { Text("OK") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+// MARK: - Attachments (view only — attachments are created and edited on the desktop)
+
+/**
+ * Opens a note attachment in whichever app handles that file type, the way Gmail opens
+ * an attachment. The file is handed over as a content:// URI from our FileProvider with
+ * temporary read permission — Android blocks file:// URIs across app boundaries.
+ *
+ * Returns null if the file isn't on this device yet (its blob may still be syncing), so
+ * the caller can say so instead of failing silently. Reading the file and its metadata
+ * is the caller's cue to run this off the main thread; launching the intent it returns
+ * belongs back on the main thread.
+ */
+private fun attachmentViewIntent(
+    context: android.content.Context,
+    resourceId: String,
+): android.content.Intent? {
+    val file = DatabaseManager.shared.resourceLocalFile(resourceId) ?: return null
+    if (!file.exists()) return null
+    val mime = DatabaseManager.shared.resourceMeta(resourceId)?.second?.takeIf { it.isNotBlank() }
+        ?: "application/octet-stream"
+    return runCatching {
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }.getOrNull()
 }
 
 // MARK: - Image handling (mirrors NoteEditorView.handleImagePick)

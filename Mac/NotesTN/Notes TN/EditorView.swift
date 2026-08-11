@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import UIKit
 import Combine
+import QuickLook
 import UniformTypeIdentifiers
 
 // iOS/iPadOS port of Mac/NotesTN/NotesTN/Views/EditorView.swift — same shell structure
@@ -112,6 +113,16 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
             // user pick which maps app to open it in.
             if let address = body["url"] as? String {
                 presentMapsChooser(address: address)
+            }
+
+        case "openAttachment", "editAttachment":
+            // Mobile is preview-only: both a tap and a double tap just preview the
+            // file. Editing an attachment in place is a desktop feature (iOS hands
+            // other apps a copy, so an edit there could never sync back).
+            if let resourceId = body["resourceId"] as? String,
+               let url = DatabaseManager.shared.resourceLocalFileURL(id: resourceId),
+               FileManager.default.fileExists(atPath: url.path) {
+                AttachmentPreview.show(url: url)
             }
 
         case "findResult":
@@ -872,6 +883,46 @@ struct NoteEditorView: View {
         )
         DatabaseManager.shared.saveResource(resource, dirty: true, synced: false)
         return resource
+    }
+}
+
+// MARK: - Attachment preview (QuickLook)
+
+/// Previews an attachment in QuickLook — the system previewer, same as Files or Mail.
+/// QLPreviewController needs a data source, so this singleton holds the URL being
+/// previewed and acts as it. iPhone and iPad are preview-only; attachments are created
+/// and edited on the Mac.
+final class AttachmentPreview: NSObject, QLPreviewControllerDataSource {
+    private static let shared = AttachmentPreview()
+    private var url: URL?
+
+    @MainActor
+    static func show(url: URL) {
+        shared.url = url
+        guard let presenter = activeViewController() else { return }
+        // Don't stack a second previewer if one is already up.
+        guard presenter.presentedViewController == nil else { return }
+        let controller = QLPreviewController()
+        controller.dataSource = shared
+        presenter.present(controller, animated: true)
+    }
+
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { url == nil ? 0 : 1 }
+
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+        (url ?? URL(fileURLWithPath: "")) as NSURL
+    }
+
+    @MainActor
+    private static func activeViewController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let keyWindow = scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first
+        var top = keyWindow?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
     }
 }
 

@@ -78,6 +78,18 @@ final class AppState: ObservableObject {
         NotificationCenter.default.publisher(for: didBecomeActiveNotification)
             .sink { [weak self] _ in self?.syncNow() }
             .store(in: &cancellables)
+
+        #if os(macOS)
+        // An attachment edited in its own app (Word, Preview, …) has been flagged for
+        // re-upload — see AttachmentEditWatcher. Reload so the corrected card size
+        // shows, then push the new bytes.
+        NotificationCenter.default.publisher(for: AttachmentEditWatcher.didDetectEdit)
+            .sink { [weak self] _ in
+                self?.loadAll()
+                self?.syncNow()
+            }
+            .store(in: &cancellables)
+        #endif
     }
 
     // MARK: - Joplin Cloud sync (pull + push, see JoplinSyncEngine)

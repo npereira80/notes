@@ -53,6 +53,10 @@ class EditorCoordinator {
     var onOpenMaps: ((address: String) -> Unit)? = null
     // In-note find progress: (total matches, 1-based current index; 0 = none).
     var onFindResult: ((count: Int, index: Int) -> Unit)? = null
+    // An attachment card was tapped — open the file for preview in whichever app
+    // handles that type. Android is view-only; attachments are created and edited on
+    // the desktop.
+    var onOpenAttachment: ((resourceId: String) -> Unit)? = null
     // True while the ProseMirror editor's contentEditable region has keyboard
     // focus (vs. the note list) — drives the selected note row's Gray (editor
     // focused) vs. Dimmed yellow (list focused) background in the tablet
@@ -80,6 +84,9 @@ class EditorCoordinator {
             "openUrl" -> message.url?.let { onOpenUrl?.invoke(it) }
             "openMaps" -> message.url?.let { onOpenMaps?.invoke(it) }
             "findResult" -> onFindResult?.invoke(message.count ?: 0, message.index ?: 0)
+            // Both map to preview: editing in place is desktop-only (Android hands
+            // other apps a copy, so an edit there could never sync back).
+            "openAttachment", "editAttachment" -> message.resourceId?.let { onOpenAttachment?.invoke(it) }
             "focusChanged" -> message.focused?.let { onFocusChanged?.invoke(it) }
             "log" -> Log.d("EditorJS", message.message ?: "")
         }
