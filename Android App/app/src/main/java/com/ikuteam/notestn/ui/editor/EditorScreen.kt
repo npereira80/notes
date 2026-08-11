@@ -419,10 +419,10 @@ fun EditorScreen(
                     FloatingActionButton(
                         // navigationBarsPadding: the Scaffold no longer insets its
                         // content at the bottom (see contentWindowInsets), so the FAB
-                        // has to clear the gesture bar itself. The 8dp on the end sits
+                        // has to clear the gesture bar itself. The 12dp on the end sits
                         // on top of Scaffold's own fixed 16dp FabSpacing, which isn't
-                        // configurable, to reach the 24dp the New Note button uses.
-                        modifier = Modifier.navigationBarsPadding().padding(end = 8.dp),
+                        // configurable, to reach the 28dp the New Note button uses.
+                        modifier = Modifier.navigationBarsPadding().padding(end = 12.dp),
                         onClick = { editMode = true },
                         containerColor = NotesYellowVivid,
                         contentColor = Color.Black,

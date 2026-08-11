@@ -599,10 +599,10 @@ private fun FloatingSearchAndAddBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // 24dp each side: the search field's left margin and the New Note
+            // 28dp each side: the search field's left margin and the New Note
             // button's right margin. The editor's Edit note FAB is padded to the same
-            // 24dp so the two buttons line up between screens.
-            .padding(horizontal = 24.dp)
+            // 28dp so the two buttons line up between screens.
+            .padding(horizontal = 28.dp)
             .navigationBarsPadding()
             .imePadding(),
         verticalAlignment = Alignment.CenterVertically,
