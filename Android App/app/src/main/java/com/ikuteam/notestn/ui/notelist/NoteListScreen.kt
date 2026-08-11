@@ -1,11 +1,7 @@
 package com.ikuteam.notestn.ui.notelist
 
-import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -18,12 +14,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -56,7 +49,10 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -68,7 +64,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,11 +79,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -111,9 +104,7 @@ import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundDark
 import com.ikuteam.notestn.ui.theme.SearchFieldBackgroundLight
 import com.ikuteam.notestn.viewmodel.NotesViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -726,14 +717,16 @@ private fun FloatingSearchField(
 }
 
 /**
- * Swipe-to-reveal actions for a note row (an alternative to the long-press menu,
- * which is unchanged). Swiping right reveals a Pin button on the left; swiping left
- * reveals a Delete button on the right. The buttons are *revealed*, not fired by the
- * swipe itself — the row stays open until a button is tapped, the row is tapped
- * (which closes it), or it's swiped back.
+ * Swipe actions for a note row (an alternative to the long-press menu, which is
+ * unchanged). Swipe right to pin/unpin, swipe left to delete — the action fires once
+ * the row is dragged past 40% of its width, like Gmail; a shorter swipe springs back.
+ *
+ * Built on Material 3's SwipeToDismissBox so the drag tracking, velocity/fling
+ * settling and animations are the platform's own rather than hand-rolled.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SwipeRevealRow(
+private fun SwipeActionsRow(
     onPin: () -> Unit,
     onDelete: () -> Unit,
     isPinned: Boolean,
@@ -744,89 +737,57 @@ private fun SwipeRevealRow(
         content()
         return
     }
-    val actionWidth = 88.dp
-    val actionWidthPx = with(LocalDensity.current) { actionWidth.toPx() }
-    val offsetX = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    val interactionSource = remember { MutableInteractionSource() }
-    val close: () -> Unit = { scope.launch { offsetX.animateTo(0f) } }
-    val isOpen = offsetX.value != 0f
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    onPin()
+                    false // the row stays in the list, so settle it back
+                }
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onDelete()
+                    false // the note leaves the list on its own once it's trashed
+                }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        },
+        // Gmail-like: the action only commits past 40% of the row's width.
+        positionalThreshold = { totalDistance -> totalDistance * 0.4f },
+    )
 
-    Box {
-        // Revealed action buttons, sitting behind the row. Only the side actually
-        // being revealed is rendered, so a button can't be tapped while hidden.
-        if (offsetX.value > 0f) {
-            Box(modifier = Modifier.matchParentSize(), contentAlignment = Alignment.CenterStart) {
-                Box(
-                    modifier = Modifier
-                        .width(actionWidth)
-                        .fillMaxHeight()
-                        .background(NotesYellowVivid)
-                        .clickable { close(); onPin() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
+    SwipeToDismissBox(
+        state = state,
+        backgroundContent = {
+            val isDelete = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
+            val background = when (state.dismissDirection) {
+                SwipeToDismissBoxValue.StartToEnd -> NotesYellowVivid
+                SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
+                SwipeToDismissBoxValue.Settled -> Color.Transparent
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(background)
+                    .padding(horizontal = 24.dp),
+                contentAlignment = if (isDelete) Alignment.CenterEnd else Alignment.CenterStart,
+            ) {
+                when (state.dismissDirection) {
+                    SwipeToDismissBoxValue.StartToEnd -> Icon(
                         Icons.Filled.PushPin,
                         contentDescription = if (isPinned) "Unpin note" else "Pin note",
                         tint = Color.Black,
                     )
-                }
-            }
-        } else if (offsetX.value < 0f) {
-            Box(modifier = Modifier.matchParentSize(), contentAlignment = Alignment.CenterEnd) {
-                Box(
-                    modifier = Modifier
-                        .width(actionWidth)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.error)
-                        .clickable { close(); onDelete() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
+                    SwipeToDismissBoxValue.EndToStart -> Icon(
                         Icons.Filled.Delete,
                         contentDescription = "Delete note",
                         tint = MaterialTheme.colorScheme.onError,
                     )
+                    SwipeToDismissBoxValue.Settled -> Unit
                 }
             }
-        }
-
-        Box(
-            modifier = Modifier
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .draggable(
-                    orientation = Orientation.Horizontal,
-                    state = rememberDraggableState { delta ->
-                        scope.launch {
-                            offsetX.snapTo(
-                                (offsetX.value + delta).coerceIn(-actionWidthPx, actionWidthPx),
-                            )
-                        }
-                    },
-                    onDragStopped = {
-                        // Past the halfway point the row stays open, otherwise it
-                        // springs back closed.
-                        val target = when {
-                            offsetX.value > actionWidthPx / 2 -> actionWidthPx
-                            offsetX.value < -actionWidthPx / 2 -> -actionWidthPx
-                            else -> 0f
-                        }
-                        offsetX.animateTo(target)
-                    },
-                ),
-        ) {
-            content()
-            // While open, a tap anywhere on the row closes it instead of opening the
-            // note — otherwise the row would stay stuck open behind the editor.
-            if (isOpen) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .clickable(interactionSource = interactionSource, indication = null) { close() },
-                )
-            }
-        }
-    }
+        },
+        content = { content() },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -869,10 +830,10 @@ private fun NoteRow(
     val searchHighlightBg = if (darkTheme) NotesYellowVivid else NotesYellowTextSelect
 
     Box {
-        // Swipe right for Pin, swipe left for Delete — an alternative to the
-        // long-press menu below, which still works. Not offered in Trash, where the
-        // actions are Restore / Delete Permanently instead.
-        SwipeRevealRow(
+        // Swipe right to Pin, swipe left to Delete — an alternative to the long-press
+        // menu below, which still works. Not offered in Trash, where the actions are
+        // Restore / Delete Permanently instead.
+        SwipeActionsRow(
             onPin = onTogglePin,
             onDelete = onDelete,
             isPinned = note.isPinned,
