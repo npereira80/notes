@@ -62,9 +62,12 @@ object MarkdownToHtml {
                     val m = attachmentLinkRegex.find(line.trim())!!
                     // escapeAttribute, not escapeHtml: this value goes inside an
                     // attribute, where an unescaped quote in a filename would end it.
+                    // And unescapeMarkdown first, because the filename never passes
+                    // through inline() (which unescapes as its last step) — without it
+                    // a file called "team_icon.png" comes back as "team\_icon.png".
                     html.append(
                         "<div class=\"pm-attachment\" data-resource-id=\"${m.groupValues[2]}\"" +
-                            " data-title=\"${escapeAttribute(m.groupValues[1])}\" data-size=\"0\" data-mime=\"\"></div>\n"
+                            " data-title=\"${escapeAttribute(unescapeMarkdown(m.groupValues[1]))}\" data-size=\"0\" data-mime=\"\"></div>\n"
                     )
                     i++
                 }
@@ -330,6 +333,12 @@ object MarkdownToHtml {
     // the line — this regex restores it to a real (unescaped) <br> afterward, which
     // the editor's `hard_break` schema node (parseDOM: [{ tag: 'br' }]) understands.
     private val brRegex = Regex("&lt;br\\s*/?&gt;", RegexOption.IGNORE_CASE)
+
+    /** Undoes HtmlToMarkdown.escapeMarkdown on a value that doesn't go through inline()
+     * — inline() does this itself as its last step, but block-level values like an
+     * attachment card's filename never reach it. Mirrors Mac's MarkdownToHtml. */
+    private fun unescapeMarkdown(text: String): String =
+        unescapeRegex.replace(text) { m -> m.groupValues[1] }
 
     /** Escapes a value going into an HTML attribute. escapeHtml below is for text
      * content and leaves quotes alone, which would end an attribute early. */

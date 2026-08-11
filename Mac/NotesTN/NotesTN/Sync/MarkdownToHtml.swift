@@ -62,8 +62,11 @@ enum MarkdownToHtml {
                 // size/mime aren't in the Markdown; JoplinSyncEngine fills them in
                 // from the resources table.
                 // escapeAttribute, not escapeHtml: this value goes inside an attribute,
-                // where an unescaped quote in a filename would end it early.
-                html += "<div class=\"pm-attachment\" data-resource-id=\"\(m.groups[1])\" data-title=\"\(escapeAttribute(m.groups[0]))\" data-size=\"0\" data-mime=\"\"></div>\n"
+                // where an unescaped quote in a filename would end it early. And
+                // unescapeMarkdown first, because the filename never passes through
+                // inline() (which unescapes as its last step) — without it a file
+                // called "team_icon.png" comes back as "team\_icon.png".
+                html += "<div class=\"pm-attachment\" data-resource-id=\"\(m.groups[1])\" data-title=\"\(escapeAttribute(unescapeMarkdown(m.groups[0])))\" data-size=\"0\" data-mime=\"\"></div>\n"
                 i += 1
 
             } else if line.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("<table") {
@@ -330,6 +333,13 @@ enum MarkdownToHtml {
 
     /// Escapes a value going into an HTML attribute. escapeHtml below is for text
     /// content and leaves quotes alone, which would end an attribute early.
+    /// Undoes HtmlToMarkdown.escapeMarkdown on a value that doesn't go through inline()
+    /// — inline() does this itself as its last step, but block-level values like an
+    /// attachment card's filename never reach it. Mirrors Android's MarkdownToHtml.
+    private static func unescapeMarkdown(_ text: String) -> String {
+        replaceAll(unescapeRegex, text) { g in g[0] }
+    }
+
     private static func escapeAttribute(_ value: String) -> String {
         value
             .replacingOccurrences(of: "&", with: "&amp;")

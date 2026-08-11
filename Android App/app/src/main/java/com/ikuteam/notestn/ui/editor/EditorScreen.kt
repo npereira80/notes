@@ -165,9 +165,9 @@ fun EditorScreen(
     var confirmPermanentDelete by remember(note.id) { mutableStateOf(false) }
     // Set when a detected address is tapped — drives the Google Maps / Waze chooser.
     var mapsAddress by remember(note.id) { mutableStateOf<String?>(null) }
-    // True when an attachment couldn't be opened (no app installed for that type, or
-    // the file hasn't finished syncing to this device yet).
-    var attachmentError by remember(note.id) { mutableStateOf(false) }
+    // Set when an attachment couldn't be opened, to why — the two cases need different
+    // advice, so they get different messages (see the dialog below).
+    var attachmentError by remember(note.id) { mutableStateOf<AttachmentOpenError?>(null) }
     // Guards against opening the same attachment twice from one tap — see onOpenAttachment.
     var isOpeningAttachment by remember(note.id) { mutableStateOf(false) }
 
@@ -254,8 +254,13 @@ fun EditorScreen(
                 scope.launch {
                     val intent = withContext(Dispatchers.IO) { attachmentViewIntent(context, resourceId) }
                     // Back on the main thread: starting an activity is main-thread work.
-                    val opened = intent != null && runCatching { context.startActivity(intent) }.isSuccess
-                    if (!opened) attachmentError = true
+                    // A throw here is all but always ActivityNotFoundException, i.e. no
+                    // installed app handles this file type.
+                    attachmentError = when {
+                        intent == null -> AttachmentOpenError.NOT_ON_DEVICE
+                        runCatching { context.startActivity(intent) }.isFailure -> AttachmentOpenError.NO_APP
+                        else -> null
+                    }
                     isOpeningAttachment = false
                 }
             }
@@ -504,12 +509,21 @@ fun EditorScreen(
         )
     }
 
-    if (attachmentError) {
+    attachmentError?.let { reason ->
         AlertDialog(
-            onDismissRequest = { attachmentError = false },
+            onDismissRequest = { attachmentError = null },
             title = { Text("Can't open attachment") },
-            text = { Text("No app on this device can open this file, or it hasn't finished syncing yet.") },
-            confirmButton = { TextButton(onClick = { attachmentError = false }) { Text("OK") } },
+            text = {
+                Text(
+                    when (reason) {
+                        AttachmentOpenError.NOT_ON_DEVICE ->
+                            "This file hasn't finished syncing to this device yet. Try again in a moment."
+                        AttachmentOpenError.NO_APP ->
+                            "No app on this device can open this type of file. Installing one that handles it will let you preview it here."
+                    }
+                )
+            },
+            confirmButton = { TextButton(onClick = { attachmentError = null }) { Text("OK") } },
         )
     }
 
@@ -906,9 +920,18 @@ private fun LinkInputDialog(
 // MARK: - Attachments (view only — attachments are created and edited on the desktop)
 
 /**
- * Opens a note attachment in whichever app handles that file type, the way Gmail opens
- * an attachment. The file is handed over as a content:// URI from our FileProvider with
- * temporary read permission — Android blocks file:// URIs across app boundaries.
+ * Why an attachment couldn't be opened. NOT_ON_DEVICE means the blob hasn't been pulled
+ * down yet; NO_APP means nothing installed handles that file type (common for Office
+ * documents on a device with no Word or Docs). They call for different advice, so the
+ * dialog tells them apart.
+ */
+private enum class AttachmentOpenError { NOT_ON_DEVICE, NO_APP }
+
+/**
+ * Builds the intent that opens a note attachment in whichever app handles that file
+ * type, the way Gmail opens an attachment. The file is handed over as a content:// URI
+ * from our FileProvider with temporary read permission — Android blocks file:// URIs
+ * across app boundaries.
  *
  * Returns null if the file isn't on this device yet (its blob may still be syncing), so
  * the caller can say so instead of failing silently. Reading the file and its metadata

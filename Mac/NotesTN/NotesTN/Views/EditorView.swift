@@ -335,6 +335,27 @@ final class EditorWebView: WKWebView {
         guard bounds.contains(localPoint) else { return nil }
         return super.hitTest(point)
     }
+
+    // MARK: QuickLook panel control
+    //
+    // QLPreviewPanel is shared app-wide and picks its controller by walking the
+    // responder chain for the first object that accepts control. This web view is
+    // the first responder whenever an attachment card is clicked, so it answers on
+    // the panel's behalf and points it at AttachmentPreview. Simple types (images,
+    // PDFs, text) often render even with no controller, but the out-of-process
+    // previewers for Office documents don't, which is why a .docx opened nothing
+    // at all before this. Apple's documented pattern, and it also gives the panel
+    // somewhere to hand key events back to.
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = AttachmentPreview.shared
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+    }
 }
 
 
@@ -936,15 +957,23 @@ final class AttachmentEditWatcher {
 /// source. Using the system panel rather than opening the file in another app keeps
 /// the preview lightweight and read-only.
 final class AttachmentPreview: NSObject, QLPreviewPanelDataSource {
-    private static let shared = AttachmentPreview()
+    /// fileprivate, not private: EditorWebView hands this to the panel when QuickLook
+    /// asks the responder chain who's controlling it (see its beginPreviewPanelControl).
+    fileprivate static let shared = AttachmentPreview()
     private var url: URL?
 
     static func show(url: URL) {
         shared.url = url
         guard let panel = QLPreviewPanel.shared() else { return }
+        // The data source is also set by EditorWebView.beginPreviewPanelControl when
+        // the panel picks its controller; setting it here as well keeps the first
+        // frame right if the panel is already open with a different file.
         panel.dataSource = shared
-        panel.reloadData()
-        panel.makeKeyAndOrderFront(nil)
+        if panel.isVisible {
+            panel.reloadData()
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+        }
     }
 
     /// Closes the panel if it's showing one of our attachments — used when a double
