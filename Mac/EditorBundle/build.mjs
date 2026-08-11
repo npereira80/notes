@@ -77,6 +77,12 @@ function writeEditorHtml(outDir) {
     --color-secondary: #666;
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
+    /* Inline code text. A deep burnt orange on the light chip (#F0F0F0) —
+       6.1:1, well past the 4.5:1 AA threshold. Dark mode needs a much lighter
+       orange to stay readable (a dark orange there is only ~2.6:1, unreadable),
+       so each theme sets its own value below. Code BLOCKS keep the normal text
+       color — see .ProseMirror pre code. */
+    --color-inline-code-text: #a03500;
     --color-blockquote: #999;
     /* Joplin-style text highlight mark (<mark>) — matches Joplin's own light
        purple highlight color, same value in light/dark. */
@@ -106,6 +112,8 @@ function writeEditorHtml(outDir) {
       --color-secondary: #aaa;
       --color-selection: #faebc3;
       --color-code-bg: rgba(255, 255, 255, 0.08);
+      /* Light orange: on the dark chip (#303030) this is 6.8:1. */
+      --color-inline-code-text: #ffa657;
       --color-blockquote: #777;
       --color-link: #deaa33;
       --color-hr: rgba(255, 255, 255, 0.3);
@@ -127,6 +135,8 @@ function writeEditorHtml(outDir) {
     --color-secondary: #aaa;
     --color-selection: #faebc3;
     --color-code-bg: rgba(255, 255, 255, 0.08);
+    /* Light orange: on the dark chip (#303030) this is 6.8:1. */
+    --color-inline-code-text: #ffa657;
     --color-blockquote: #777;
     --color-link: #deaa33;
     --color-hr: rgba(255, 255, 255, 0.3);
@@ -139,6 +149,7 @@ function writeEditorHtml(outDir) {
     --color-secondary: #666;
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
+    --color-inline-code-text: #a03500;
     --color-blockquote: #999;
     --color-link: #deaa33;
     --color-hr: rgba(0, 0, 0, 0.2);
@@ -243,6 +254,7 @@ function writeEditorHtml(outDir) {
     font-family: var(--font-mono);
     font-size: 0.88em;
     background: var(--color-code-bg);
+    color: var(--color-inline-code-text);
     border-radius: 3px;
     padding: 1px 4px;
   }
@@ -261,6 +273,9 @@ function writeEditorHtml(outDir) {
   }
   .ProseMirror pre code {
     background: none;
+    /* Code blocks keep the normal text color — the orange above is for inline
+       code only, where it distinguishes a code span from the prose around it. */
+    color: var(--color-text);
     padding: 0;
     font-size: 0.875em;
   }
