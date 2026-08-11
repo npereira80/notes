@@ -8,7 +8,7 @@
  *   Native → JS:  window.NativeEditor.setContent(html) / execCommand(cmd, value) etc.
  */
 
-import { EditorState, Plugin, PluginKey, Selection, Transaction } from 'prosemirror-state';
+import { EditorState, NodeSelection, Plugin, PluginKey, Selection, Transaction } from 'prosemirror-state';
 import { EditorView, DirectEditorProps, Decoration, DecorationSet } from 'prosemirror-view';
 import { DOMParser as PMDOMParser, DOMSerializer, Fragment } from 'prosemirror-model';
 import { history } from 'prosemirror-history';
@@ -852,6 +852,44 @@ const arrowDownOutOfCodeBlock = (state: EditorState, dispatch?: (tr: Transaction
   return true;
 };
 
+// Selects an attachment card's node from its DOM element. posAtDOM lands either on the
+// node itself or just inside it depending on where in the card the click was, so both
+// are checked before giving up.
+function selectAttachmentCard(view: EditorView, card: HTMLElement) {
+  const at = view.posAtDOM(card, 0);
+  for (const pos of [at, at - 1]) {
+    if (pos >= 0 && view.state.doc.nodeAt(pos)?.type === schema.nodes.attachment) {
+      view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)));
+      return;
+    }
+  }
+}
+
+// Space with an attachment card selected previews the file, the way Space does in
+// Finder, instead of replacing the card with a space character. Nothing is dispatched:
+// returning true is what keeps the space out of the document.
+const previewSelectedAttachment = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+  const sel = state.selection;
+  if (!(sel instanceof NodeSelection) || sel.node.type !== schema.nodes.attachment) return false;
+  const resourceId = sel.node.attrs.resourceId as string;
+  if (!resourceId) return false;
+  if (dispatch) postToNative({ type: 'openAttachment', resourceId });
+  return true;
+};
+
+// Backspace with the cursor just after an attachment card deletes the card. The base
+// keymap would select it on the first press and delete it on the second, which reads
+// as nothing having happened.
+const deleteAttachmentBefore = (state: EditorState, dispatch?: (tr: Transaction) => void) => {
+  const { $from, empty } = state.selection;
+  if (!empty || $from.parentOffset > 0 || $from.depth < 1) return false;
+  const blockStart = $from.before($from.depth);
+  const previous = state.doc.resolve(blockStart).nodeBefore;
+  if (!previous || previous.type !== schema.nodes.attachment) return false;
+  if (dispatch) dispatch(state.tr.delete(blockStart - previous.nodeSize, blockStart).scrollIntoView());
+  return true;
+};
+
 /// Clicking (or tapping) in the empty space below a note that ends in a "box" —
 /// a code block or a table — adds a paragraph after it and puts the cursor there.
 /// Without this the cursor is stuck inside the box with no way to write normal text
@@ -906,6 +944,10 @@ function buildKeymap() {
     // Escape a code block that ends the note (see arrowDownOutOfCodeBlock).
     'ArrowDown': arrowDownOutOfCodeBlock,
 
+    // Preview a selected attachment (see previewSelectedAttachment). Falls through to
+    // the normal space everywhere else.
+    'Space': previewSelectedAttachment,
+
     // Enter in list items (title-to-body handoff checked first)
     'Enter': chainCommands(
       moveFromTitleToBody,
@@ -923,6 +965,7 @@ function buildKeymap() {
     // these commands return false).
     'Backspace': chainCommands(
       guardBackspaceIntoTitle,
+      deleteAttachmentBefore,
       (state, dispatch) => {
         if (state.selection.$from.parentOffset > 0) return false;
         if (!isFirstListItem(state)) return false;
@@ -1202,6 +1245,14 @@ function createEditor(): EditorView {
               const resourceId = card.getAttribute('data-resource-id') || '';
               if (!resourceId) return false;
               event.preventDefault();
+              // preventDefault stops the browser placing the selection, so put it on
+              // the card ourselves. That's what makes Space (preview) and Backspace
+              // (delete) work on it afterwards, the way a selected file behaves in
+              // Finder. Not on Android: a tap there is read mode's "open it", and a
+              // selection outline left behind would just look like a stuck state (in
+              // Android edit mode this handler bails out above and the tap selects the
+              // card by itself).
+              if (!isAndroid) selectAttachmentCard(view, card);
               if (attachmentClickTimer !== null) {
                 clearTimeout(attachmentClickTimer);
                 attachmentClickTimer = null;

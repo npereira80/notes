@@ -15694,6 +15694,33 @@
     }
     return true;
   };
+  function selectAttachmentCard(view, card) {
+    var _a;
+    const at = view.posAtDOM(card, 0);
+    for (const pos of [at, at - 1]) {
+      if (pos >= 0 && ((_a = view.state.doc.nodeAt(pos)) == null ? void 0 : _a.type) === schema_default.nodes.attachment) {
+        view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)));
+        return;
+      }
+    }
+  }
+  var previewSelectedAttachment = (state, dispatch) => {
+    const sel = state.selection;
+    if (!(sel instanceof NodeSelection) || sel.node.type !== schema_default.nodes.attachment) return false;
+    const resourceId = sel.node.attrs.resourceId;
+    if (!resourceId) return false;
+    if (dispatch) postToNative({ type: "openAttachment", resourceId });
+    return true;
+  };
+  var deleteAttachmentBefore = (state, dispatch) => {
+    const { $from, empty: empty2 } = state.selection;
+    if (!empty2 || $from.parentOffset > 0 || $from.depth < 1) return false;
+    const blockStart = $from.before($from.depth);
+    const previous = state.doc.resolve(blockStart).nodeBefore;
+    if (!previous || previous.type !== schema_default.nodes.attachment) return false;
+    if (dispatch) dispatch(state.tr.delete(blockStart - previous.nodeSize, blockStart).scrollIntoView());
+    return true;
+  };
   function clickBelowToEscape() {
     const trapping = [schema_default.nodes.code_block, schema_default.nodes.table];
     const escapeBelow = (view, clientY) => {
@@ -15737,6 +15764,9 @@
       "Shift-Tab": (state, dispatch, view) => commands.outdent(view),
       // Escape a code block that ends the note (see arrowDownOutOfCodeBlock).
       "ArrowDown": arrowDownOutOfCodeBlock,
+      // Preview a selected attachment (see previewSelectedAttachment). Falls through to
+      // the normal space everywhere else.
+      "Space": previewSelectedAttachment,
       // Enter in list items (title-to-body handoff checked first)
       "Enter": chainCommands(
         moveFromTitleToBody,
@@ -15753,6 +15783,7 @@
       // these commands return false).
       "Backspace": chainCommands(
         guardBackspaceIntoTitle,
+        deleteAttachmentBefore,
         (state, dispatch) => {
           if (state.selection.$from.parentOffset > 0) return false;
           if (!isFirstListItem(state)) return false;
@@ -15969,6 +16000,7 @@
                 const resourceId = card.getAttribute("data-resource-id") || "";
                 if (!resourceId) return false;
                 event.preventDefault();
+                if (!isAndroid) selectAttachmentCard(view2, card);
                 if (attachmentClickTimer !== null) {
                   clearTimeout(attachmentClickTimer);
                   attachmentClickTimer = null;
