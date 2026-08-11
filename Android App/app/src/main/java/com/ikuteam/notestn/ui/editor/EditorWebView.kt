@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.net.Uri
+import android.view.DragEvent
 import android.view.ViewGroup
 import android.util.Log
 import android.webkit.ConsoleMessage
@@ -103,6 +104,38 @@ fun EditorWebView(
                 }
 
                 addJavascriptInterface(EditorJsBridge(coordinator), "AndroidBridge")
+
+                // Drag and drop an image in from another app (split screen, or a
+                // desktop-mode window). Android's WebView doesn't pass file drops to
+                // the page, so this can't ride on the editor bundle's handleDrop the
+                // way Mac and iPad do — the drop is caught here and handed to the
+                // screen, which inserts it at the cursor.
+                setOnDragListener { _, event ->
+                    when (event.action) {
+                        DragEvent.ACTION_DRAG_STARTED ->
+                            event.clipDescription?.hasMimeType("image/*") == true
+
+                        DragEvent.ACTION_DROP -> {
+                            // The URI belongs to the dragging app, so we need read
+                            // permission on it before the copy. The grant lasts until
+                            // this activity is destroyed, which is well past the copy.
+                            ctx.findActivity()?.requestDragAndDropPermissions(event)
+                            val clip = event.clipData
+                            var handled = false
+                            if (clip != null) {
+                                for (i in 0 until clip.itemCount) {
+                                    clip.getItemAt(i).uri?.let {
+                                        coordinator.onImageDropped?.invoke(it)
+                                        handled = true
+                                    }
+                                }
+                            }
+                            handled
+                        }
+
+                        else -> true
+                    }
+                }
 
                 webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(
@@ -213,6 +246,17 @@ private fun applyDarkMode(webView: WebView, dark: Boolean) {
 
 private fun openInBrowser(context: android.content.Context, url: Uri) {
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url)) }
+}
+
+/** The Activity behind a Context, which may be wrapped a few layers deep. Needed to
+ * ask for permission on a dragged-in URI, which only an Activity can do. */
+private fun android.content.Context.findActivity(): android.app.Activity? {
+    var context: android.content.Context? = this
+    while (context is android.content.ContextWrapper) {
+        if (context is android.app.Activity) return context
+        context = context.baseContext
+    }
+    return null
 }
 
 /** Decodes a HEIC/HEIF file and re-encodes it as JPEG bytes, for serving to the

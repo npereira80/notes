@@ -203,6 +203,21 @@ fun EditorScreen(
     // and the keyboard finishing its show animation.
     var sawKeyboardThisEdit by remember(note.id) { mutableStateOf(false) }
 
+    // Copies an image into resources and inserts it at the cursor. Shared by the
+    // toolbar's picker and by an image dragged in from another app.
+    val insertImageFromUri: (android.net.Uri) -> Unit = { uri ->
+        scope.launch {
+            val resource = withContext(Dispatchers.IO) { copyImageIntoResources(context, uri, note.id) }
+            if (resource != null) {
+                coordinator.insertImage(
+                    src = "https://appassets.androidplatform.net/resources/${resource.filename}",
+                    alt = resource.title,
+                    resourceId = resource.id,
+                )
+            }
+        }
+    }
+
     // Consume the one-shot "open in edit mode" signal so re-opening this note later
     // starts in read mode.
     LaunchedEffect(note.id) {
@@ -235,6 +250,13 @@ fun EditorScreen(
                     )
                 }
             }
+        }
+        // An image dragged in from another app (see the drag listener in
+        // EditorWebView.kt). Dropping one is an edit, so a note being read switches to
+        // edit mode rather than quietly changing underneath.
+        coordinator.onImageDropped = { uri ->
+            if (!editMode && !readOnly) editMode = true
+            if (!readOnly) insertImageFromUri(uri)
         }
         coordinator.onOpenUrl = { url ->
             runCatching {
@@ -335,16 +357,7 @@ fun EditorScreen(
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val resource = withContext(Dispatchers.IO) { copyImageIntoResources(context, uri, note.id) }
-            if (resource != null) {
-                coordinator.insertImage(
-                    src = "https://appassets.androidplatform.net/resources/${resource.filename}",
-                    alt = resource.title,
-                    resourceId = resource.id,
-                )
-            }
-        }
+        insertImageFromUri(uri)
     }
 
     key(note.id) {

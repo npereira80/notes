@@ -852,6 +852,28 @@ const arrowDownOutOfCodeBlock = (state: EditorState, dispatch?: (tr: Transaction
   return true;
 };
 
+/** One dropped file as a data URI, the shape native expects for an image. */
+function readAsDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Hands dropped images to native one at a time, so several dropped together land in
+ * the order they were picked up rather than in whichever order they finish reading. */
+async function sendDroppedImages(files: File[]) {
+  for (const file of files) {
+    try {
+      postToNative({ type: 'imageRequested', html: await readAsDataUri(file) });
+    } catch {
+      // Unreadable file (permissions, or it vanished mid-drag) — skip it and carry on.
+    }
+  }
+}
+
 // Selects an attachment card's node from its DOM element. posAtDOM lands either on the
 // node itself or just inside it depending on where in the card the click was, so both
 // are checked before giving up.
@@ -1589,6 +1611,27 @@ function createEditor(): EditorView {
             }
             return false;
           },
+
+          // Images dragged into the note from Finder, Photos, another app or another
+          // window. The cursor moves to where the file was dropped first, then the
+          // file goes to native by the same route as a pasted image: only native can
+          // save it as a real Resource, and it inserts at the selection we just set.
+          // Android's WebView doesn't deliver file drops to the page at all, so it
+          // has its own drag listener instead — see EditorWebView.kt.
+          handleDrop(view, event) {
+            const dropped = Array.from(event.dataTransfer?.files ?? []);
+            const images = dropped.filter((file) => file.type.startsWith('image/'));
+            if (images.length === 0) return false;
+            event.preventDefault();
+            const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+            if (coords) {
+              const selection = Selection.near(view.state.doc.resolve(coords.pos));
+              view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+            }
+            view.focus();
+            sendDroppedImages(images);
+            return true;
+          },
         },
       }),
 
@@ -1680,6 +1723,17 @@ document.addEventListener('DOMContentLoaded', () => {
     log(`Editor init error: ${err}`);
     return;
   }
+
+  // Dropping a file anywhere on the page makes a web view navigate to it by default,
+  // which would replace the note with the raw file. dragover has to be cancelled for
+  // any drop to be delivered at all; the drop itself is cancelled only outside the
+  // editor, where the editor's own handleDrop (images) and ProseMirror's built-in
+  // handling (dragged text) don't apply.
+  document.addEventListener('dragover', (event) => event.preventDefault());
+  document.addEventListener('drop', (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest?.('.ProseMirror')) event.preventDefault();
+  });
 
   // After a find/findNext/findPrevious dispatch: scroll the current match into view
   // (without moving the selection) and report count/index to the native find bar.

@@ -47,6 +47,12 @@ class EditorCoordinator {
 
     var onContentChanged: ((title: String, body: String) -> Unit)? = null
     var onImageRequested: ((dataUri: String) -> Unit)? = null
+    // An image dragged into the note from another app. Android's WebView doesn't
+    // deliver file drops to the page (Mac and iOS get them as a web drop event, handled
+    // in the editor bundle), so this comes from a drag listener on the WebView instead
+    // — see EditorWebView.kt. The screen copies it into resources and inserts it, the
+    // same as a picked image.
+    var onImageDropped: ((uri: android.net.Uri) -> Unit)? = null
     var onOpenUrl: ((String) -> Unit)? = null
     // A detected address (see the data detectors in Mac/EditorBundle/src/index.ts) —
     // the screen shows a Google Maps / Waze chooser and opens the pick.

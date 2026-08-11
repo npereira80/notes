@@ -15694,6 +15694,22 @@
     }
     return true;
   };
+  function readAsDataUri(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+  async function sendDroppedImages(files) {
+    for (const file of files) {
+      try {
+        postToNative({ type: "imageRequested", html: await readAsDataUri(file) });
+      } catch {
+      }
+    }
+  }
   function selectAttachmentCard(view, card) {
     var _a;
     const at = view.posAtDOM(card, 0);
@@ -16282,6 +16298,27 @@
                 }
               }
               return false;
+            },
+            // Images dragged into the note from Finder, Photos, another app or another
+            // window. The cursor moves to where the file was dropped first, then the
+            // file goes to native by the same route as a pasted image: only native can
+            // save it as a real Resource, and it inserts at the selection we just set.
+            // Android's WebView doesn't deliver file drops to the page at all, so it
+            // has its own drag listener instead — see EditorWebView.kt.
+            handleDrop(view2, event) {
+              var _a;
+              const dropped = Array.from(((_a = event.dataTransfer) == null ? void 0 : _a.files) ?? []);
+              const images = dropped.filter((file) => file.type.startsWith("image/"));
+              if (images.length === 0) return false;
+              event.preventDefault();
+              const coords = view2.posAtCoords({ left: event.clientX, top: event.clientY });
+              if (coords) {
+                const selection = Selection.near(view2.state.doc.resolve(coords.pos));
+                view2.dispatch(view2.state.tr.setSelection(selection).scrollIntoView());
+              }
+              view2.focus();
+              sendDroppedImages(images);
+              return true;
             }
           }
         }),
@@ -16321,6 +16358,12 @@
       log(`Editor init error: ${err}`);
       return;
     }
+    document.addEventListener("dragover", (event) => event.preventDefault());
+    document.addEventListener("drop", (event) => {
+      var _a;
+      const target = event.target;
+      if (!((_a = target == null ? void 0 : target.closest) == null ? void 0 : _a.call(target, ".ProseMirror"))) event.preventDefault();
+    });
     const afterFindUpdate = () => {
       const st = findKey.getState(view.state);
       if (!st) return;
