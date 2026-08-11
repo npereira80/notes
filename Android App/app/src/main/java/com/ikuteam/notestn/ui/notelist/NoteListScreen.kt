@@ -3,7 +3,6 @@ package com.ikuteam.notestn.ui.notelist
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -42,6 +41,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -87,10 +87,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
-import com.ikuteam.notestn.ui.common.BackdropBlurState
-import com.ikuteam.notestn.ui.common.backdropBlurBackground
-import com.ikuteam.notestn.ui.common.captureForBackdropBlur
-import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
 import com.ikuteam.notestn.ui.theme.CardBackgroundDark
 import com.ikuteam.notestn.ui.theme.CardBackgroundLight
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
@@ -218,10 +214,6 @@ fun NoteListScreen(
     val cardBackground = if (darkTheme) CardBackgroundDark else CardBackgroundLight
     val searchFieldBackground = if (darkTheme) SearchFieldBackgroundDark else SearchFieldBackgroundLight
     var confirmEmptyTrash by remember { mutableStateOf(false) }
-    // Backdrop blur source — the note list content scrolling behind the floating
-    // search bar / new note button (see BackdropBlurState above).
-    val blurState = rememberBackdropBlurState()
-
     // Keyed on the note lists (not remember {} with no keys): a plain remember froze
     // "today" at whatever date the screen first composed on. In an app that stays in
     // memory for days, every "Today"/"Yesterday" label and date group was wrong after
@@ -290,11 +282,10 @@ fun NoteListScreen(
                 onNewNote = { viewModel.createNote { note -> onNoteClick(note) } },
                 showAddButton = !isTrash,
                 fieldBackground = searchFieldBackground,
-                blurState = blurState,
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().captureForBackdropBlur(blurState)) {
+        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             // Fixed-height slot (the indicator's own default height) rather than
             // conditionally inserting the indicator — inserting it shifted the whole
             // list down and back up every time the 2s-debounced background push ran,
@@ -574,8 +565,9 @@ private fun LazyListScope.noteCardRows(
     }
 }
 
-// Backdrop blur (search bar / new note button glass) now lives in
-// ui/common/BackdropBlur.kt, shared with EditorScreen's formatting toolbar.
+// The blurred-glass treatment this screen used to give the search bar and the new
+// note button is gone: both are solid now, and the blur helper it used lives in
+// ui/common/BackdropBlur.kt, still used by EditorScreen's formatting toolbar.
 
 // MARK: - Floating search + add bar
 
@@ -589,13 +581,15 @@ private fun FloatingSearchAndAddBar(
     onFocusConsumed: () -> Unit,
     onNewNote: () -> Unit,
     fieldBackground: Color,
-    blurState: BackdropBlurState,
     showAddButton: Boolean = true,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp)
+            // 16dp, Material's standard screen margin, rather than the 24dp this used
+            // to inset by — with the smaller FAB beside it the field has room to run
+            // closer to the edges.
+            .padding(horizontal = 16.dp)
             .navigationBarsPadding()
             .imePadding(),
         verticalAlignment = Alignment.CenterVertically,
@@ -611,23 +605,17 @@ private fun FloatingSearchAndAddBar(
             modifier = Modifier.weight(1f),
         )
         if (showAddButton) {
-            val shape = RoundedCornerShape(16.dp)
-            // Custom Box instead of FloatingActionButton — FAB draws its own solid
-            // Surface internally with no hook to slot a blurred backdrop in behind it,
-            // so the glass look needs full control over the draw order (blur, then
-            // tint, then icon). "Most opaque" glass setting — see FloatingSearchField's
-            // same 0.82 tint alpha.
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .shadow(3.dp, shape)
-                    .clip(shape)
-                    .backdropBlurBackground(blurState)
-                    .background(NotesYellowVivid.copy(alpha = 0.80f))
-                    .clickable(onClick = onNewNote),
-                contentAlignment = Alignment.Center,
+            // The platform's own small FAB, the same one the editor uses for Edit note,
+            // rather than a hand-built button: same size, shape, elevation and ripple
+            // as every other FAB in the app, and it follows the platform if that
+            // changes. It replaced a custom Box that existed only to sit a blurred
+            // backdrop behind the fill, which the solid FAB no longer needs.
+            SmallFloatingActionButton(
+                onClick = onNewNote,
+                containerColor = NotesYellowVivid,
+                contentColor = Color.Black,
             ) {
-                Icon(Icons.Default.Add, contentDescription = "New Note", tint = Color.Black)
+                Icon(Icons.Default.Add, contentDescription = "New Note")
             }
         }
     }
@@ -654,16 +642,14 @@ private fun FloatingSearchField(
         }
     }
 
-    // Same elevation/shape language as the FAB next to it, so the two read as one
-    // floating control group. `modifier` already carries `weight(1f)` from the
-    // caller's Row, so only height needs fixing here.
-    //
-    // Solid (opaque) fill — the search bar no longer uses the translucent/blurred
-    // glass look, per request. The FAB next to it keeps its glass treatment.
-    val shape = RoundedCornerShape(16.dp)
+    // Matches the small FAB next to it exactly — 40dp tall, 12dp corners, same
+    // elevation — so the two read as one floating control group. `modifier` already
+    // carries `weight(1f)` from the caller's Row, so only height needs fixing here.
+    // Solid (opaque) fill; the FAB is solid too.
+    val shape = RoundedCornerShape(12.dp)
     Box(
         modifier = modifier
-            .height(48.dp)
+            .height(40.dp)
             .shadow(3.dp, shape)
             .clip(shape)
             .background(background)
