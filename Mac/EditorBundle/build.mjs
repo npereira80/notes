@@ -88,14 +88,14 @@ function writeEditorHtml(outDir) {
        purple highlight color, same value in light/dark. */
     --color-highlight-bg: #f1e0f3;
     --color-highlight-text: #b04ac5;
-    --color-link: #deaa33;
+    --color-link: #f0bc46;
     --color-hr: rgba(0, 0, 0, 0.2);
     /* Task list checkbox — darkYellow (brand color, same as --color-link) for the
        checked state instead of the browser's default system-accent blue, plus an
        explicit border so the unchecked box isn't left in native-control chrome
        (which doesn't follow the page's own light/dark theme). */
     --color-checkbox-border: rgba(0, 0, 0, 0.35);
-    --color-checkbox-checked-bg: #deaa33;
+    --color-checkbox-checked-bg: #f0bc46;
     /* Mac only — set imperatively via EditorWebView.swift's setTopInset (mirrors
        Android's data-theme trick above) whenever the WKWebView is resized to
        flow underneath the native window toolbar's translucent material, so
@@ -115,10 +115,10 @@ function writeEditorHtml(outDir) {
       /* Light orange: on the dark chip (#303030) this is 6.8:1. */
       --color-inline-code-text: #ffa657;
       --color-blockquote: #777;
-      --color-link: #deaa33;
+      --color-link: #f0bc46;
       --color-hr: rgba(255, 255, 255, 0.3);
       --color-checkbox-border: rgba(255, 255, 255, 0.4);
-      --color-checkbox-checked-bg: #deaa33;
+      --color-checkbox-checked-bg: #f0bc46;
     }
   }
 
@@ -138,10 +138,10 @@ function writeEditorHtml(outDir) {
     /* Light orange: on the dark chip (#303030) this is 6.8:1. */
     --color-inline-code-text: #ffa657;
     --color-blockquote: #777;
-    --color-link: #deaa33;
+    --color-link: #f0bc46;
     --color-hr: rgba(255, 255, 255, 0.3);
     --color-checkbox-border: rgba(255, 255, 255, 0.4);
-    --color-checkbox-checked-bg: #deaa33;
+    --color-checkbox-checked-bg: #f0bc46;
   }
   :root[data-theme="light"] {
     --color-text: #000;
@@ -151,10 +151,10 @@ function writeEditorHtml(outDir) {
     --color-code-bg: rgba(0, 0, 0, 0.06);
     --color-inline-code-text: #a03500;
     --color-blockquote: #999;
-    --color-link: #deaa33;
+    --color-link: #f0bc46;
     --color-hr: rgba(0, 0, 0, 0.2);
     --color-checkbox-border: rgba(0, 0, 0, 0.35);
-    --color-checkbox-checked-bg: #deaa33;
+    --color-checkbox-checked-bg: #f0bc46;
   }
 
   html {
@@ -209,7 +209,7 @@ function writeEditorHtml(outDir) {
     min-height: inherit;
     /* Matches the native title field's cursor (MaterialTheme primary / NotesYellowDark
        on Android, AccentColor on Mac) instead of the browser-engine default black. */
-    caret-color: #deaa33;
+    caret-color: #f0bc46;
   }
 
   .ProseMirror > * + * { margin-top: 0.75em; }
@@ -435,13 +435,13 @@ function writeEditorHtml(outDir) {
   }
 
   /* Find-in-note highlights (see the find plugin in index.ts). Every match gets the
-     dimmed brand yellow; the current match (prev/next) gets the vivid brand yellow. */
+     dimmed brand yellow; the current match (prev/next) gets the full brand yellow. */
   .ProseMirror .pm-find-match {
     background: #fbe699;
     border-radius: 2px;
   }
   .ProseMirror .pm-find-current {
-    background: #f9b524;
+    background: #f0bc46;
   }
 
   /* Highlight */
@@ -492,7 +492,7 @@ function writeEditorHtml(outDir) {
     font-size: 1em;
     font-weight: normal;
     /* Hidden unless the cursor is in this heading (see the pm-heading-focused
-       decoration in index.ts) — collapsed or not. */
+       decoration in index.ts) or the pointer is over it — collapsed or not. */
     opacity: 0;
     transform: translateY(-50%) rotate(90deg); /* expanded: chevron points down */
     transition: transform 0.15s ease;
@@ -500,6 +500,19 @@ function writeEditorHtml(outDir) {
   }
   .ProseMirror .pm-heading-focused .pm-heading-arrow {
     opacity: 1;
+  }
+  /* Hovering the heading reveals the arrow too, so a section can be collapsed
+     without first clicking into it. Gated on a real pointer: on touch, :hover
+     sticks to the last-tapped element until something else is tapped, which
+     would leave an arrow showing on Android/iPhone with nothing hovering it. */
+  @media (hover: hover) and (pointer: fine) {
+    .ProseMirror h2:hover .pm-heading-arrow,
+    .ProseMirror h3:hover .pm-heading-arrow,
+    .ProseMirror h4:hover .pm-heading-arrow,
+    .ProseMirror h5:hover .pm-heading-arrow,
+    .ProseMirror h6:hover .pm-heading-arrow {
+      opacity: 1;
+    }
   }
   .ProseMirror .pm-heading-arrow::after { content: '›'; }
   .ProseMirror .pm-heading-arrow:hover { background: var(--color-code-bg); }

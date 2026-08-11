@@ -1,19 +1,22 @@
 import SwiftUI
 
 // MARK: - Brand yellow palette
-// Single source of truth for the four approved yellow shades (same values in
+// Single source of truth for the approved yellow shades (same values in
 // light and dark mode — see Android's ui/theme/Color.kt AppColors object and
 // the --color-* custom properties in Mac/EditorBundle/build.mjs for the
 // mirrored definitions used by the shared ProseMirror editor).
+// vividYellow and darkYellow used to be two shades (#F9B524 / #DEAA33); both are
+// now the single brand yellow #F0BC46. The two names are kept because they mark
+// different roles and may diverge again.
 enum AppColors {
     /// Selected notebook row (sidebar) while the sidebar itself has keyboard focus;
     /// also new note/new notebook buttons.
-    static let vividYellow = Color(red: 0xF9 / 255, green: 0xB5 / 255, blue: 0x24 / 255)          // #F9B524
+    static let vividYellow = Color(red: 0xF0 / 255, green: 0xBC / 255, blue: 0x46 / 255)          // #F0BC46
 
     /// Main tint/accent color, text caret, modal text buttons, active text field;
     /// also the text color of a selected-but-unfocused sidebar row (see
     /// sidebarSelectedInactiveBackground below).
-    static let darkYellow = Color(red: 0xDE / 255, green: 0xAA / 255, blue: 0x33 / 255)           // #DEAA33
+    static let darkYellow = Color(red: 0xF0 / 255, green: 0xBC / 255, blue: 0x46 / 255)           // #F0BC46
 
     /// Selected note row background whenever the sidebar does NOT have focus
     /// (i.e. focus is in the note list or the editor).
