@@ -562,8 +562,19 @@ function writeEditorHtml(outDir) {
     pointer-events: none;
     z-index: 20;
   }
-  .ProseMirror .pm-col-resize-active {
+  /* Set on the editor root while a column border is grabbable (see the plugin's
+     attributes prop) rather than on the cells, so the cursor is right no matter
+     which side the pointer approaches the border from. */
+  .ProseMirror.pm-col-resize-cursor {
     cursor: col-resize;
+  }
+  /* While a drag is in flight: no text selection, which is what keeps Android's
+     text magnifier from appearing over the column being dragged. */
+  .ProseMirror.pm-col-resizing,
+  .ProseMirror.pm-col-resizing * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .selectedCell::after {
     z-index: 2;

@@ -549,6 +549,23 @@ function percentColumnResizing() {
       },
     },
     props: {
+      // The resize cursor goes on the editor ROOT, not on the highlighted cells.
+      // Approaching a border from the right, the pointer sits in the NEXT cell while
+      // the column being resized (and so the highlight) is the previous one — a
+      // cursor set on those cells would never appear under the pointer, which is why
+      // the cursor only changed when approaching left-to-right. Setting it on the
+      // root makes it correct from either direction, and is what prosemirror-tables
+      // does with its own `resize-cursor` class.
+      //
+      // While actually dragging, a second class suppresses text selection — that's
+      // what stops Android's text magnifier (loupe) popping up over the drag.
+      attributes: (state): { [name: string]: string } => {
+        const st = colResizeKey.getState(state);
+        if (!st || st.activeCell < 0) return {};
+        return {
+          class: st.preview ? 'pm-col-resize-cursor pm-col-resizing' : 'pm-col-resize-cursor',
+        };
+      },
       decorations(state) {
         const pluginState = colResizeKey.getState(state) ?? { activeCell: -1, preview: null };
         return columnWidthDecorations(state, pluginState);
