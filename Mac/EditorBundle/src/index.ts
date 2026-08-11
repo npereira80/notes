@@ -276,8 +276,11 @@ function buildAutoLinkDecos(doc: any): DecorationSet {
 //   * handles mouse AND touch with the same math.
 
 const COL_MIN_PERCENT = 10;      // a column can never be squeezed below this
-const EDGE_ZONE_MOUSE = 10;      // px either side of a boundary that grabs it
-const EDGE_ZONE_TOUCH = 16;      // wider for a fingertip
+// How close to a column border the pointer must be to grab it. Deliberately tight
+// for the mouse: anything wider starts swallowing ordinary clicks meant to put the
+// cursor in a cell. Touch gets more room because a fingertip is imprecise.
+const EDGE_ZONE_MOUSE = 4;
+const EDGE_ZONE_TOUCH = 14;
 const TOUCH_DRAG_THRESHOLD = 4;  // px of movement before a touch counts as a drag
 
 interface ColResizeState {
@@ -312,20 +315,62 @@ function columnPercents(table: any): number[] {
   return widths.map((w) => (w / total) * 100);
 }
 
-/// The cell whose RIGHT edge is within [zone] px of the given point, or -1. The last
-/// column is excluded: the table is pinned to 100% width, so its right edge has
-/// nothing to trade against.
-function edgeCellAt(view: EditorView, clientX: number, clientY: number, zone: number): number {
-  const found = view.posAtCoords({ left: clientX - zone, top: clientY });
+/// Walks up from an event target to the <td>/<th> containing it, or null.
+function domCellAround(target: EventTarget | null): HTMLElement | null {
+  let el = target as HTMLElement | null;
+  while (el && el.nodeName !== 'TD' && el.nodeName !== 'TH') {
+    el = el.classList?.contains('ProseMirror') ? null : (el.parentNode as HTMLElement | null);
+  }
+  return el;
+}
+
+/// The cell whose RIGHT edge is being grabbed, or -1 if the pointer isn't within
+/// [zone] px of a column border.
+///
+/// The bounding-rect test is what keeps this from claiming ordinary clicks: without
+/// it, a click anywhere inside a cell resolved to that cell and started a resize, so
+/// the cursor could never be placed in a table. Only the few pixels either side of a
+/// border count. A pointer near a cell's LEFT border is grabbing the previous
+/// column's right edge, so that maps back one column. The last column is excluded —
+/// the table is pinned to 100% width, so its right edge has nothing to trade against.
+function edgeCellAt(
+  view: EditorView,
+  target: EventTarget | null,
+  clientX: number,
+  clientY: number,
+  zone: number,
+): number {
+  const cellDom = domCellAround(target);
+  if (!cellDom) return -1;
+  const rect = cellDom.getBoundingClientRect();
+  let side: 'left' | 'right';
+  if (rect.right - clientX <= zone) side = 'right';
+  else if (clientX - rect.left <= zone) side = 'left';
+  else return -1;
+
+  // Resolve a position safely inside the cell on the relevant side.
+  const found = view.posAtCoords({
+    left: side === 'right' ? clientX - zone : clientX + zone,
+    top: clientY,
+  });
   if (!found) return -1;
   const $cell = cellAround(view.state.doc.resolve(found.pos));
   if (!$cell) return -1;
   const table = $cell.node(-1);
   const map = TableMap.get(table);
   const start = $cell.start(-1);
-  const col = map.colCount($cell.pos - start) + $cell.nodeAfter!.attrs.colspan - 1;
-  if (col >= map.width - 1) return -1;
-  return $cell.pos;
+
+  let cellPos = $cell.pos;
+  if (side === 'left') {
+    // Step back to the cell before this one in the same row.
+    const index = map.map.indexOf($cell.pos - start);
+    if (index < 0 || index % map.width === 0) return -1; // first column: no border to drag
+    cellPos = start + map.map[index - 1];
+  }
+
+  const col = columnIndexInTable(table, start, cellPos);
+  if (col < 0 || col >= map.width - 1) return -1;
+  return cellPos;
 }
 
 /// Column index (0-based) of the cell at [cellPos] within its table.
@@ -512,8 +557,9 @@ function percentColumnResizing() {
         // ── Mouse ──
         mousemove(view, event) {
           if (dragging) return false;
+          const mouse = event as MouseEvent;
           const cellPos = view.editable
-            ? edgeCellAt(view, (event as MouseEvent).clientX, (event as MouseEvent).clientY, EDGE_ZONE_MOUSE)
+            ? edgeCellAt(view, mouse.target, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE)
             : -1;
           setActive(view, cellPos);
           return false;
@@ -525,7 +571,7 @@ function percentColumnResizing() {
         mousedown(view, event) {
           if (!view.editable) return false;
           const mouse = event as MouseEvent;
-          const cellPos = edgeCellAt(view, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE);
+          const cellPos = edgeCellAt(view, mouse.target, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE);
           if (cellPos < 0) return false;
           if (!beginDrag(view, cellPos, mouse.clientX)) return false;
           dragging = true;
@@ -557,7 +603,7 @@ function percentColumnResizing() {
           if (!view.editable) return false;
           const touch = (event as TouchEvent).touches[0];
           if (!touch) return false;
-          const cellPos = edgeCellAt(view, touch.clientX, touch.clientY, EDGE_ZONE_TOUCH);
+          const cellPos = edgeCellAt(view, event.target, touch.clientX, touch.clientY, EDGE_ZONE_TOUCH);
           if (cellPos < 0) return false;
           // Only a candidate for now — a plain tap must still place the cursor, so
           // nothing is claimed or committed until the finger actually moves. The

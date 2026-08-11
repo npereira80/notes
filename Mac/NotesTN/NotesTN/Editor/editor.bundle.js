@@ -15143,8 +15143,8 @@
     return DecorationSet.create(doc3, decos);
   }
   var COL_MIN_PERCENT = 10;
-  var EDGE_ZONE_MOUSE = 10;
-  var EDGE_ZONE_TOUCH = 16;
+  var EDGE_ZONE_MOUSE = 4;
+  var EDGE_ZONE_TOUCH = 14;
   var TOUCH_DRAG_THRESHOLD = 4;
   var colResizeKey = new PluginKey("percentColumnResizing");
   function columnPercents(table) {
@@ -15171,17 +15171,41 @@
     const total = widths.reduce((a, b) => a + b, 0);
     return widths.map((w) => w / total * 100);
   }
-  function edgeCellAt(view, clientX, clientY, zone) {
-    const found2 = view.posAtCoords({ left: clientX - zone, top: clientY });
+  function domCellAround(target) {
+    var _a;
+    let el = target;
+    while (el && el.nodeName !== "TD" && el.nodeName !== "TH") {
+      el = ((_a = el.classList) == null ? void 0 : _a.contains("ProseMirror")) ? null : el.parentNode;
+    }
+    return el;
+  }
+  function edgeCellAt(view, target, clientX, clientY, zone) {
+    const cellDom = domCellAround(target);
+    if (!cellDom) return -1;
+    const rect = cellDom.getBoundingClientRect();
+    let side;
+    if (rect.right - clientX <= zone) side = "right";
+    else if (clientX - rect.left <= zone) side = "left";
+    else return -1;
+    const found2 = view.posAtCoords({
+      left: side === "right" ? clientX - zone : clientX + zone,
+      top: clientY
+    });
     if (!found2) return -1;
     const $cell = cellAround(view.state.doc.resolve(found2.pos));
     if (!$cell) return -1;
     const table = $cell.node(-1);
     const map2 = TableMap.get(table);
     const start = $cell.start(-1);
-    const col = map2.colCount($cell.pos - start) + $cell.nodeAfter.attrs.colspan - 1;
-    if (col >= map2.width - 1) return -1;
-    return $cell.pos;
+    let cellPos = $cell.pos;
+    if (side === "left") {
+      const index = map2.map.indexOf($cell.pos - start);
+      if (index < 0 || index % map2.width === 0) return -1;
+      cellPos = start + map2.map[index - 1];
+    }
+    const col = columnIndexInTable(table, start, cellPos);
+    if (col < 0 || col >= map2.width - 1) return -1;
+    return cellPos;
   }
   function columnIndexOf(view, cellPos) {
     const $cell = view.state.doc.resolve(cellPos);
@@ -15331,7 +15355,8 @@
           // ── Mouse ──
           mousemove(view, event) {
             if (dragging) return false;
-            const cellPos = view.editable ? edgeCellAt(view, event.clientX, event.clientY, EDGE_ZONE_MOUSE) : -1;
+            const mouse = event;
+            const cellPos = view.editable ? edgeCellAt(view, mouse.target, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE) : -1;
             setActive(view, cellPos);
             return false;
           },
@@ -15342,7 +15367,7 @@
           mousedown(view, event) {
             if (!view.editable) return false;
             const mouse = event;
-            const cellPos = edgeCellAt(view, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE);
+            const cellPos = edgeCellAt(view, mouse.target, mouse.clientX, mouse.clientY, EDGE_ZONE_MOUSE);
             if (cellPos < 0) return false;
             if (!beginDrag(view, cellPos, mouse.clientX)) return false;
             dragging = true;
@@ -15372,7 +15397,7 @@
             if (!view.editable) return false;
             const touch = event.touches[0];
             if (!touch) return false;
-            const cellPos = edgeCellAt(view, touch.clientX, touch.clientY, EDGE_ZONE_TOUCH);
+            const cellPos = edgeCellAt(view, event.target, touch.clientX, touch.clientY, EDGE_ZONE_TOUCH);
             if (cellPos < 0) return false;
             beginDrag(view, cellPos, touch.clientX);
             dragging = false;
