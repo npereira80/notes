@@ -15839,6 +15839,47 @@
     div.appendChild(serializer.serializeFragment(bodyFragment));
     return { title: titleNode.textContent, body: div.innerHTML };
   }
+  var checkboxFlashKey = new PluginKey("checkboxFlash");
+  var CHECKBOX_FLASH_MS = 200;
+  var checkboxFlashTimer = null;
+  function flashCheckbox(view, pos) {
+    const $pos = view.state.doc.resolve(pos);
+    let itemPos = null;
+    for (let d = $pos.depth; d >= 0; d--) {
+      if ($pos.node(d).type === schema_default.nodes.task_list_item) {
+        itemPos = $pos.before(d);
+        break;
+      }
+    }
+    if (itemPos === null) return;
+    if (checkboxFlashTimer) clearTimeout(checkboxFlashTimer);
+    view.dispatch(view.state.tr.setMeta(checkboxFlashKey, itemPos));
+    checkboxFlashTimer = setTimeout(() => {
+      checkboxFlashTimer = null;
+      view.dispatch(view.state.tr.setMeta(checkboxFlashKey, null));
+    }, CHECKBOX_FLASH_MS);
+  }
+  var checkboxFlashPlugin = new Plugin({
+    key: checkboxFlashKey,
+    state: {
+      init: () => DecorationSet.empty,
+      apply(tr, old) {
+        const meta = tr.getMeta(checkboxFlashKey);
+        if (meta === void 0) return old.map(tr.mapping, tr.doc);
+        if (meta === null) return DecorationSet.empty;
+        const node = tr.doc.nodeAt(meta);
+        if (!node) return DecorationSet.empty;
+        return DecorationSet.create(tr.doc, [
+          Decoration.node(meta, meta + node.nodeSize, { class: "pm-checkbox-tapped" })
+        ]);
+      }
+    },
+    props: {
+      decorations(state) {
+        return checkboxFlashKey.getState(state) ?? DecorationSet.empty;
+      }
+    }
+  });
   function createEditor() {
     const domEl = document.getElementById("editor");
     if (!domEl) throw new Error("#editor element not found");
@@ -16164,6 +16205,8 @@
             }
           }
         }),
+        // Android's round checkbox tap highlight (see flashCheckbox above).
+        checkboxFlashPlugin,
         // Handle checkbox clicks in task list items
         new Plugin({
           props: {
@@ -16175,6 +16218,7 @@
                   event.preventDefault();
                   const pos = view2.posAtDOM(target, 0);
                   toggleCheckboxAtPos(view2, pos);
+                  if (isAndroid) flashCheckbox(view2, pos);
                   return true;
                 }
                 return false;

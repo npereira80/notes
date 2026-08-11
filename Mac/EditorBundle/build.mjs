@@ -334,12 +334,28 @@ function writeEditorHtml(outDir) {
     -webkit-appearance: none;
     /* Small top margin to sit the circle roughly centered on the first text line
        (may need a pixel of adjustment across font sizes). Raised from 2px along
-       with the 20px-to-18px size change, so the circle's center stays put. */
-    margin: 3px 0 0 0;
+       with the 20px-to-18px size change, so the circle's center stays put, and
+       then 1px more to sit it properly on the text's baseline. */
+    margin: 4px 0 0 0;
     border: 1.5px solid var(--color-checkbox-border);
     /* Round (circular) checkbox — a full 50% radius. */
     border-radius: 50%;
     background: transparent;
+    transition: box-shadow 0.15s ease;
+  }
+  /* Android only. Its WebView draws the tap highlight as the element's
+     rectangle, so tapping the round checkbox flashed a square; WebKit already
+     rounds its own highlight, so Mac and iOS are left alone. The square is
+     suppressed here and replaced by a circular state layer like Material's own
+     checkbox, as a box-shadow spread so it follows the 50% radius and doesn't
+     affect layout. The class comes from a decoration on the list item, set on
+     tap by flashCheckbox in index.ts (not from :active, which never applies
+     here because that handler calls preventDefault). */
+  body.pm-android .ProseMirror ul[data-is-checklist] li input[type="checkbox"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.pm-android .ProseMirror ul[data-is-checklist] li.pm-checkbox-tapped input[type="checkbox"] {
+    box-shadow: 0 0 0 6px var(--color-chevron-bg-hover);
   }
   /* Fill/checkmark is driven ONLY by the parent li's .checked CLASS (set from
      node.attrs.checked in toDOM), never the input's :checked pseudo-class. The node
