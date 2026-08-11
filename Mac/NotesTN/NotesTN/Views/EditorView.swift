@@ -617,6 +617,13 @@ struct NoteEditorView: View {
             guard ready else { return }
             let note = currentNote
             editorCoordinator.setContent(title: note?.title ?? initialTitle, body: note?.body ?? initialBody)
+            // A just-created note starts with the cursor in its empty title, so typing
+            // names it straight away (see AppState.createNote). setContent leaves the
+            // selection at the very start of the document, which is the title, so this
+            // only has to take focus. Existing notes keep focus wherever it was.
+            if let id = note?.id, appState.consumePendingFocus(noteID: id), !readOnly {
+                DispatchQueue.main.async { editorCoordinator.focus() }
+            }
         }
         // A sync pull that updates the currently open note used to leave the editor
         // showing the old content (it was only ever set once per note id) — the list

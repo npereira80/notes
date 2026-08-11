@@ -29,9 +29,8 @@
     --color-secondary: #666;
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
-    /* Heading collapse chevron's square background, and its hover state. */
-    --color-chevron-bg: rgba(0, 0, 0, 0.06);
-    --color-chevron-bg-hover: rgba(0, 0, 0, 0.12);
+    /* Pressed/held tint drawn behind a control (Android's checkbox tap highlight). */
+    --color-state-layer: rgba(0, 0, 0, 0.12);
     /* Inline code text. A deep burnt orange on the light chip (#F0F0F0) —
        6.1:1, well past the 4.5:1 AA threshold. Dark mode needs a much lighter
        orange to stay readable (a dark orange there is only ~2.6:1, unreadable),
@@ -67,8 +66,7 @@
       --color-secondary: #aaa;
       --color-selection: #faebc3;
       --color-code-bg: rgba(255, 255, 255, 0.08);
-      --color-chevron-bg: rgba(255, 255, 255, 0.08);
-      --color-chevron-bg-hover: rgba(255, 255, 255, 0.16);
+      --color-state-layer: rgba(255, 255, 255, 0.16);
       /* Light orange: on the dark chip (#303030) this is 6.8:1. */
       --color-inline-code-text: #ffa657;
       --color-blockquote: #777;
@@ -92,8 +90,7 @@
     --color-secondary: #aaa;
     --color-selection: #faebc3;
     --color-code-bg: rgba(255, 255, 255, 0.08);
-    --color-chevron-bg: rgba(255, 255, 255, 0.08);
-    --color-chevron-bg-hover: rgba(255, 255, 255, 0.16);
+    --color-state-layer: rgba(255, 255, 255, 0.16);
     /* Light orange: on the dark chip (#303030) this is 6.8:1. */
     --color-inline-code-text: #ffa657;
     --color-blockquote: #777;
@@ -108,8 +105,7 @@
     --color-secondary: #666;
     --color-selection: #faebc3;
     --color-code-bg: rgba(0, 0, 0, 0.06);
-    --color-chevron-bg: rgba(0, 0, 0, 0.06);
-    --color-chevron-bg-hover: rgba(0, 0, 0, 0.12);
+    --color-state-layer: rgba(0, 0, 0, 0.12);
     --color-inline-code-text: #a03500;
     --color-blockquote: #999;
     --color-link: #f9b524;
@@ -133,9 +129,9 @@
     min-height: 100%;
     background: var(--color-bg);
     color: var(--color-text);
-    /* 32px on the left, 8 more than the right: the heading collapse chevron's
-       square sits out in that padding (see .pm-heading-arrow) and needs the
-       room. Text lines up at the same place on every line, chevron or not. */
+    /* 32px on the left, 8 more than the right: the heading collapse chevron
+       sits out in that padding (see .pm-heading-arrow) and needs the room. Text
+       lines up at the same place on every line, chevron or not. */
     padding: var(--native-toolbar-inset) 24px 48px 32px;
     font-family: var(--font-body);
     font-size: 16px;
@@ -158,7 +154,7 @@
   /* iPhone only (see index.ts's ?platform=ios-phone detection) — the default
      right padding is sized for Mac's much wider window and left too large a gap
      on iPhone's narrow screen. The left keeps the default 32px, which the
-     heading chevron's square needs. iPad keeps the default throughout. */
+     heading chevron needs. iPad keeps the default throughout. */
   body.pm-ios-phone {
     padding: 0 12px 48px 32px;
   }
@@ -307,7 +303,7 @@
     -webkit-tap-highlight-color: transparent;
   }
   body.pm-android .ProseMirror ul[data-is-checklist] li.pm-checkbox-tapped input[type="checkbox"] {
-    box-shadow: 0 0 0 6px var(--color-chevron-bg-hover);
+    box-shadow: 0 0 0 6px var(--color-state-layer);
   }
   /* Fill/checkmark is driven ONLY by the parent li's .checked CLASS (set from
      node.attrs.checked in toDOM), never the input's :checked pseudo-class. The node
@@ -459,10 +455,10 @@
      instead of being pushed right by an inline arrow. */
   .ProseMirror .pm-heading-arrow {
     position: absolute;
-    /* Square, and sized in em so it stays in proportion at every heading level.
-       0.9em of the largest heading (h2, 24px) is ~22px, which is why the body
-       needs 32px of left padding: 22 for the square, 6 for the gap to the text,
-       and 4 left over so it isn't flush against the window edge. */
+    /* Square hit area, sized in em so it stays in proportion at every heading
+       level. 0.9em of the largest heading (h2, 24px) is ~22px, which is why the
+       body needs 32px of left padding: 22 for the chevron, 6 for the gap to the
+       text, and 4 left over so it isn't flush against the window edge. */
     width: 0.9em;
     height: 0.9em;
     left: calc(-0.9em - 6px);
@@ -471,8 +467,6 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    border-radius: 4px;
-    background: var(--color-chevron-bg);
     color: var(--color-secondary);
     font-size: 1em;
     font-weight: normal;
@@ -480,7 +474,7 @@
        decoration in index.ts) or the pointer is over it — collapsed or not. */
     opacity: 0;
     /* No rotation here: collapsing rotates the chevron glyph (::after) alone, so
-       the gray square stays put instead of swinging with it. */
+       the box that takes the click keeps its size and position. */
     transform: translateY(-50%);
     user-select: none;
   }
@@ -508,7 +502,8 @@
     transform: rotate(90deg); /* expanded: chevron points down */
     transition: transform 0.15s ease;
   }
-  .ProseMirror .pm-heading-arrow:hover { background: var(--color-chevron-bg-hover); }
+  /* Hover just darkens the chevron itself — no background box behind it. */
+  .ProseMirror .pm-heading-arrow:hover { color: var(--color-text); }
   /* Collapsed: chevron points right (h1/"Title" has no arrow at all — see
      schema.ts's heading toDOM) */
   .ProseMirror h2[data-collapsed] .pm-heading-arrow::after,

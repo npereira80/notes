@@ -412,7 +412,10 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             // show up in Joplin's per-notebook views. Fall back to an existing folder,
             // or create one, rather than ever pushing an empty parent_id.
             val folderId = _selectedFolderId.value ?: withContext(Dispatchers.IO) { ensureAnyFolder() }
-            val note = Note(folderId = folderId, title = "New Note", body = "")
+            // No placeholder title: a new note opens empty, showing the editor's own
+            // "Title" placeholder with the cursor already in it, so the first thing
+            // typed is the title. The note list shows "Untitled" until there is one.
+            val note = Note(folderId = folderId, title = "", body = "")
             // New note, never seen by Joplin Cloud yet — dirty so it gets pushed, not
             // synced since the server doesn't know about it.
             withContext(Dispatchers.IO) { db.saveNote(note, dirty = true, synced = false) }

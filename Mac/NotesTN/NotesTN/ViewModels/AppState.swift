@@ -18,6 +18,10 @@ final class AppState: ObservableObject {
     @Published var isTrashSelected: Bool = false
     @Published var selectedFolderID: String? = nil     // nil = "All Notes"
     @Published var selectedNoteID: String? = nil
+    // Set by createNote to the new note's id, cleared by consumePendingFocus once the
+    // editor has taken the cursor. A new note is the one case where the editor should
+    // grab focus on Mac without the user clicking into it.
+    @Published var pendingFocusNoteID: String? = nil
     // True while the sidebar (notebooks list) has keyboard focus, vs. the note
     // list or the editor. Drives both the sidebar's selected-row color (Vivid
     // when focused, gray+dark-yellow text when not) and the note list's
@@ -352,9 +356,12 @@ final class AppState: ObservableObject {
         // show up in Joplin's per-notebook views. Fall back to an existing folder, or
         // create one, rather than ever pushing an empty parent_id.
         let folderId = selectedFolderID ?? ensureAnyFolder()
+        // No placeholder title: a new note opens empty, showing the editor's own
+        // "Title" placeholder with the cursor already in it, so the first thing typed
+        // is the title. The note list shows "Untitled" until there is one.
         let note = Note(
             folderId: folderId,
-            title: "New Note",
+            title: "",
             body: ""
         )
         // New note, never seen by Joplin Cloud yet — dirty so it gets pushed, not
@@ -363,7 +370,19 @@ final class AppState: ObservableObject {
         loadAll()
         selectedNoteID = note.id
         UserDefaults.standard.set(note.id, forKey: selectedNoteKey)
+        // Mac only: put the cursor in the new note's empty title. Opening an existing
+        // note deliberately leaves focus where it was (usually the list, for arrow-key
+        // browsing), so this is a one-shot signal rather than "focus on open". iOS and
+        // iPadOS focus the editor whenever a note opens and ignore this.
+        pendingFocusNoteID = note.id
         schedulePushDebounce()
+    }
+
+    /// True once, for the note this signal was raised for — see createNote.
+    func consumePendingFocus(noteID: String) -> Bool {
+        guard pendingFocusNoteID == noteID else { return false }
+        pendingFocusNoteID = nil
+        return true
     }
 
     /// Returns an existing folder's id, or creates a default one if there are none.
