@@ -417,10 +417,12 @@ fun EditorScreen(
                 if (!readOnly && !editMode) {
                     // The standard 56dp FAB, matching the New Note button in the list.
                     FloatingActionButton(
-                        // The Scaffold no longer insets its content at the bottom (see
-                        // contentWindowInsets), so the FAB has to clear the gesture bar
-                        // itself.
-                        modifier = Modifier.navigationBarsPadding(),
+                        // navigationBarsPadding: the Scaffold no longer insets its
+                        // content at the bottom (see contentWindowInsets), so the FAB
+                        // has to clear the gesture bar itself. The 4dp on the end sits
+                        // on top of Scaffold's own fixed 16dp FabSpacing, which isn't
+                        // configurable, to reach the 20dp the New Note button uses.
+                        modifier = Modifier.navigationBarsPadding().padding(end = 4.dp),
                         onClick = { editMode = true },
                         containerColor = NotesYellowVivid,
                         contentColor = Color.Black,

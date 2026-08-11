@@ -599,10 +599,10 @@ private fun FloatingSearchAndAddBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // 16dp, Material's standard screen margin, rather than the 24dp this used
-            // to inset by — with the smaller FAB beside it the field has room to run
-            // closer to the edges.
-            .padding(horizontal = 16.dp)
+            // 20dp each side: the search field's left margin and the New Note
+            // button's right margin. The editor's Edit note FAB is padded to the same
+            // 20dp so the two buttons line up between screens.
+            .padding(horizontal = 20.dp)
             .navigationBarsPadding()
             .imePadding(),
         verticalAlignment = Alignment.CenterVertically,
