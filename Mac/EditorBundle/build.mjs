@@ -577,6 +577,13 @@ function writeEditorHtml(outDir) {
     transform: rotate(90deg); /* expanded: chevron points down */
     transition: transform 0.15s ease;
   }
+  /* Android only: 2dp larger (this WebView uses width=device-width, so CSS px map
+     1:1 to dp). Only the mask grows, so the chevron stays centred in the same box
+     and the tap circle around it doesn't move. */
+  body.pm-android .ProseMirror .pm-heading-arrow::after {
+    -webkit-mask-size: calc(0.6em + 2px) calc(0.6em + 2px);
+    mask-size: calc(0.6em + 2px) calc(0.6em + 2px);
+  }
   /* Hover just darkens the chevron itself — no background box behind it. */
   .ProseMirror .pm-heading-arrow:hover { color: var(--color-text); }
   /* Android only, and for the same reason as the checkbox above: its WebView's own
