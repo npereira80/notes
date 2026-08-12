@@ -93,6 +93,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
+import com.ikuteam.notestn.ui.common.backdropBlurBackground
+import com.ikuteam.notestn.ui.common.captureForBackdropBlur
+import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
 import com.ikuteam.notestn.ui.theme.CardBackgroundDark
 import com.ikuteam.notestn.ui.theme.CardBackgroundLight
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
@@ -242,10 +245,24 @@ fun NoteListScreen(
     // and this is what keeps the last row scrollable clear of both.
     val listBottomPadding = 88.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
+    // Backdrop blur source for the translucent top bar — the list scrolls underneath
+    // it and is what gets blurred (see ui/common/BackdropBlur.kt, the same helper the
+    // editor's formatting toolbar uses).
+    val blurState = rememberBackdropBlurState()
+
     Scaffold(
         modifier = modifier,
         containerColor = groupedBackground,
         topBar = {
+            // Translucent, with the list blurred behind it rather than an opaque fill,
+            // so scrolled content stays faintly visible as it passes underneath. The
+            // bar itself draws nothing: the Box behind it paints the blurred backdrop
+            // and the tint over it, in that order.
+            Box(
+                modifier = Modifier
+                    .backdropBlurBackground(blurState)
+                    .background(groupedBackground.copy(alpha = 0.72f)),
+            ) {
             CenterAlignedTopAppBar(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -272,8 +289,9 @@ fun NoteListScreen(
                         TextButton(onClick = { confirmEmptyTrash = true }) { Text("Empty Trash") }
                     }
                 },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = groupedBackground),
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent),
             )
+            }
         },
         // Top only, so the list fills to the bottom edge and scrolls underneath the
         // gesture bar instead of stopping above it and leaving a strip of window
@@ -298,31 +316,13 @@ fun NoteListScreen(
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            // Fixed-height slot (the indicator's own default height) rather than
-            // conditionally inserting the indicator — inserting it shifted the whole
-            // list down and back up every time the 2s-debounced background push ran,
-            // i.e. periodically while typing in the two-pane layout.
-            Box(modifier = Modifier.fillMaxWidth().height(4.dp)) {
-                if (isSyncing) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-            }
-            if (syncError != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Sync failed: $syncError",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = { viewModel.clearSyncError() }) { Text("Dismiss") }
-                }
-            }
+        // The Scaffold's top padding isn't applied to this Box: the list fills the
+        // whole screen and passes under the translucent bar, and carries that padding
+        // as its own top contentPadding instead so the first row still starts below
+        // the bar at rest. The sync indicator and the sync error sit in an overlay
+        // below, pinned just under the bar rather than pushing the list down.
+        Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().captureForBackdropBlur(blurState)) {
             PullToRefreshBox(
                 // isRefreshing (user-initiated), not isSyncing — driving this with
                 // isSyncing made the refresh spinner flash into view for every
@@ -342,7 +342,10 @@ fun NoteListScreen(
             } else if (searchText.isNotEmpty()) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = listBottomPadding),
+                    contentPadding = PaddingValues(
+                        top = padding.calculateTopPadding(),
+                        bottom = listBottomPadding,
+                    ),
                 ) {
                     items(notes, key = { it.id }) { note ->
                         NoteRow(
@@ -387,7 +390,10 @@ fun NoteListScreen(
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = listBottomPadding),
+                    contentPadding = PaddingValues(
+                        top = padding.calculateTopPadding(),
+                        bottom = listBottomPadding,
+                    ),
                 ) {
                     if (pinnedNotes.isNotEmpty()) {
                         item(key = "header-pinned") {
@@ -470,6 +476,40 @@ fun NoteListScreen(
                     }
                 }
             }
+            }
+        }
+
+            // Sync indicator and sync error, pinned just under the top bar. An overlay
+            // rather than part of the column above, so neither one shifts the list:
+            // the indicator used to push everything down and back up each time the
+            // 2s-debounced background push ran, i.e. periodically while typing.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = padding.calculateTopPadding()),
+            ) {
+                if (isSyncing) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                if (syncError != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            // Opaque: it sits over the notes rather than above them now.
+                            .background(groupedBackground)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Sync failed: $syncError",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { viewModel.clearSyncError() }) { Text("Dismiss") }
+                    }
+                }
             }
         }
     }
@@ -578,9 +618,10 @@ private fun LazyListScope.noteCardRows(
     }
 }
 
-// The blurred-glass treatment this screen used to give the search bar and the new
-// note button is gone: both are solid now, and the blur helper it used lives in
-// ui/common/BackdropBlur.kt, still used by EditorScreen's formatting toolbar.
+// The search bar and the new note button are solid; the blurred-glass treatment they
+// used to have now belongs to the top bar instead (see the Scaffold's topBar above).
+// The helper itself lives in ui/common/BackdropBlur.kt, shared with EditorScreen's
+// formatting toolbar.
 
 // MARK: - Floating search + add bar
 
