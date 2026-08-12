@@ -1,13 +1,18 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What Android's auto-backup may carry to a new device (API 30 and below; see
+  data_extraction_rules.xml for 31+).
+
+  The sync state is excluded on purpose. It holds the Joplin delta cursor, which
+  says "you already have everything up to here". Restoring it onto a device whose
+  database did NOT come along leaves the app asking the server for changes since a
+  point it never actually reached, so it syncs successfully and shows nothing.
+
+  The account file is excluded too: its session and password are encrypted with an
+  Android Keystore key, and Keystore keys don't leave the device they were made on,
+  so a restored copy could never be decrypted anyway.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="joplin_sync_state.xml"/>
+    <exclude domain="sharedpref" path="joplin_account.xml"/>
 </full-backup-content>

@@ -51,6 +51,11 @@ class JoplinAccountStore private constructor(context: Context) {
 
     fun clear() {
         prefs.edit().clear().apply()
+        // The sync cursor lives in its own preferences file and belongs to the account
+        // that was just signed out. Leaving it behind meant the next account started
+        // its first sync from a stranger's position in the delta and pulled nothing.
+        appContext.getSharedPreferences(SYNC_STATE_PREFS, Context.MODE_PRIVATE)
+            .edit().clear().apply()
         _account.value = null
     }
 
@@ -108,6 +113,8 @@ class JoplinAccountStore private constructor(context: Context) {
         private const val KEY_USER_ID = "user_id"
         private const val KEY_SESSION_ID = "session_id"
         private const val KEY_PASSWORD = "password"
+        /** JoplinSyncEngine's own preferences file — cleared alongside the account. */
+        private const val SYNC_STATE_PREFS = "joplin_sync_state"
 
         @Volatile
         private var instance: JoplinAccountStore? = null

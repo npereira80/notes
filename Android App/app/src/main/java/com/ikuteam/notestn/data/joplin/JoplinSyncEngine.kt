@@ -59,7 +59,14 @@ class JoplinSyncEngine(context: Context) {
 
         var notesUpdated = 0
         var foldersUpdated = 0
-        var pageCursor = if (force) null else cursor
+        // A saved cursor with an empty database behind it means the preferences came
+        // from somewhere the notes didn't — Android's auto-backup carries shared_prefs
+        // to a new phone during setup, but not this app's SQLite file. Left alone, the
+        // server correctly reports no changes since that cursor and the app sits empty
+        // forever. Ignoring it costs one full pull, once.
+        val strandedCursor = cursor != null && db.fetchFolders().isEmpty() && db.fetchNotes().isEmpty()
+        if (strandedCursor) Log.w(LOG_TAG, "cursor found with no local notes or notebooks — pulling everything instead")
+        var pageCursor = if (force || strandedCursor) null else cursor
         val startedAt = System.currentTimeMillis()
         Log.i(LOG_TAG, "sync start: force=$force, cursor=${pageCursor ?: "(none, full pull)"}")
 

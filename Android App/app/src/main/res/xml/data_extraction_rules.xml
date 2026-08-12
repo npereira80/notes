@@ -1,19 +1,18 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What may be carried to a new device on API 31+, for both cloud backup and a direct
+  device-to-device transfer. See backup_rules.xml for the reasoning; the short version
+  is that a restored sync cursor without the database it belongs to makes the app sync
+  successfully and show nothing, and a restored account can't be decrypted off its
+  original device.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="sharedpref" path="joplin_sync_state.xml"/>
+        <exclude domain="sharedpref" path="joplin_account.xml"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="joplin_sync_state.xml"/>
+        <exclude domain="sharedpref" path="joplin_account.xml"/>
     </device-transfer>
-    -->
 </data-extraction-rules>
