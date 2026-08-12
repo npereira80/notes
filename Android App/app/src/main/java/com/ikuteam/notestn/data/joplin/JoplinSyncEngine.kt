@@ -1,7 +1,6 @@
 package com.ikuteam.notestn.data.joplin
 
 import android.content.Context
-import android.util.Log
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Folder
 import com.ikuteam.notestn.data.Note
@@ -65,10 +64,7 @@ class JoplinSyncEngine(context: Context) {
         // server correctly reports no changes since that cursor and the app sits empty
         // forever. Ignoring it costs one full pull, once.
         val strandedCursor = cursor != null && db.fetchFolders().isEmpty() && db.fetchNotes().isEmpty()
-        if (strandedCursor) Log.w(LOG_TAG, "cursor found with no local notes or notebooks — pulling everything instead")
         var pageCursor = if (force || strandedCursor) null else cursor
-        val startedAt = System.currentTimeMillis()
-        Log.i(LOG_TAG, "sync start: force=$force, cursor=${pageCursor ?: "(none, full pull)"}")
 
         try {
             // Collect every change across all delta pages first, then process resources
@@ -78,11 +74,9 @@ class JoplinSyncEngine(context: Context) {
             val allChanges = mutableListOf<JoplinCloudApi.DeltaChange>()
             while (true) {
                 val delta = JoplinCloudApi.delta(account.sessionId, pageCursor).getOrElse { error ->
-                    Log.w(LOG_TAG, "delta failed after ${allChanges.size} changes: ${describe(error)}")
                     return@withContext mapFailure(error)
                 }
                 allChanges.addAll(delta.items)
-                Log.i(LOG_TAG, "delta page: ${delta.items.size} changes, has_more=${delta.has_more}")
                 if (!delta.has_more) {
                     cursor = delta.cursor
                     break
@@ -116,7 +110,6 @@ class JoplinSyncEngine(context: Context) {
                 }
 
                 val content = JoplinCloudApi.itemContent(account.sessionId, itemName).getOrElse { error ->
-                    Log.w(LOG_TAG, "fetching $itemName failed (${parsedItems.size} of ${allChanges.size} done): ${describe(error)}")
                     return@withContext mapFailure(error)
                 }
                 parsedItems.add(JoplinItemParser.parse(content))
@@ -134,21 +127,9 @@ class JoplinSyncEngine(context: Context) {
                 }
             }
 
-            Log.i(
-                LOG_TAG,
-                "pulled ${allChanges.size} changes in ${System.currentTimeMillis() - startedAt}ms: " +
-                    "$notesUpdated notes, $foldersUpdated notebooks written locally",
-            )
-
             when (val pushResult = push(account.sessionId)) {
-                is PushOutcome.Unauthorized -> {
-                    Log.w(LOG_TAG, "push: session rejected")
-                    SyncOutcome.Unauthorized
-                }
-                is PushOutcome.Failure -> {
-                    Log.w(LOG_TAG, "push failed: ${pushResult.message}")
-                    SyncOutcome.Failure(pushResult.message)
-                }
+                is PushOutcome.Unauthorized -> SyncOutcome.Unauthorized
+                is PushOutcome.Failure -> SyncOutcome.Failure(pushResult.message)
                 is PushOutcome.Success -> SyncOutcome.Success(
                     notesUpdated = notesUpdated,
                     foldersUpdated = foldersUpdated,
@@ -158,15 +139,9 @@ class JoplinSyncEngine(context: Context) {
                 )
             }
         } catch (t: Throwable) {
-            Log.e(LOG_TAG, "sync threw", t)
             SyncOutcome.Failure(t.message ?: "Sync failed.")
         }
     }
-
-    /** Error text for the log: the exception's own type and message, not the friendly
-     * wording the banner shows, so a failed sync can be told apart from a slow one. */
-    private fun describe(error: Throwable): String =
-        "${error::class.simpleName}: ${error.message ?: "(no message)"}"
 
     private sealed class PushOutcome {
         data class Success(val notesPushed: Int, val foldersPushed: Int, val resourcesPushed: Int) : PushOutcome()
@@ -181,11 +156,6 @@ class JoplinSyncEngine(context: Context) {
      * mirroring pull's resources-before-notes order, so a note's `:/resourceId` links
      * resolve to something that already exists remotely as soon as the note lands. */
     private suspend fun push(sessionId: String): PushOutcome {
-        Log.i(
-            LOG_TAG,
-            "push: ${db.fetchDirtyNotes().size} notes, ${db.fetchDirtyFolders().size} notebooks, " +
-                "${db.fetchDirtyResources().size} resources, ${db.fetchPendingDeletes().size} deletes waiting",
-        )
         for ((id, itemType) in db.fetchPendingDeletes()) {
             JoplinCloudApi.deleteItem(sessionId, "$id.md").getOrElse { error ->
                 return mapPushFailure(error)
@@ -408,8 +378,6 @@ class JoplinSyncEngine(context: Context) {
         else PushOutcome.Failure(describeError(error))
 
     companion object {
-        /** adb logcat -s JoplinSync to watch a sync run. */
-        private const val LOG_TAG = "JoplinSync"
         private const val KEY_CURSOR = "delta_cursor"
         private const val CHANGE_TYPE_DELETE = 3
         private const val TYPE_NOTE = "1"
