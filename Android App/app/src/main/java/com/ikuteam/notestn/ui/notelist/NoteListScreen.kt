@@ -4,7 +4,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
@@ -48,10 +47,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -62,7 +61,6 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -73,10 +71,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
@@ -87,15 +87,16 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.ikuteam.notestn.data.DatabaseManager
 import com.ikuteam.notestn.data.Note
+import com.ikuteam.notestn.ui.common.BackdropBlurState
 import com.ikuteam.notestn.ui.common.backdropBlurBackground
 import com.ikuteam.notestn.ui.common.captureForBackdropBlur
 import com.ikuteam.notestn.ui.common.rememberBackdropBlurState
+import com.ikuteam.notestn.ui.common.rememberIsOnline
 import com.ikuteam.notestn.ui.theme.CardBackgroundDark
 import com.ikuteam.notestn.ui.theme.CardBackgroundLight
 import com.ikuteam.notestn.ui.theme.GroupedBackgroundDark
@@ -245,6 +246,26 @@ fun NoteListScreen(
     // and this is what keeps the last row scrollable clear of both.
     val listBottomPadding = 88.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
+    // Drives the "No internet connection" strip below the top bar.
+    val isOnline = rememberIsOnline()
+
+    // What the status strip below the top bar has to say, if anything. Offline wins
+    // over the others: with no connection the sync error is always "couldn't reach
+    // Joplin Cloud", and saying that twice, in the app's words rather than the user's,
+    // helps nobody.
+    val statusMessage = when {
+        !isOnline -> "No internet connection."
+        isSyncing -> "Syncing…"
+        syncError != null -> "Sync failed: $syncError"
+        else -> null
+    }
+    // Measured rather than assumed: the strip's height depends on the text, and the
+    // list needs it as extra top padding so its first section header isn't left
+    // underneath the strip (the strip is an overlay, so nothing else moves for it).
+    val density = LocalDensity.current
+    var statusStripHeight by remember { mutableStateOf(0.dp) }
+    val listTopInset = if (statusMessage != null) statusStripHeight else 0.dp
+
     // Backdrop blur source for the translucent top bar — the list scrolls underneath
     // it and is what gets blurred (see ui/common/BackdropBlur.kt, the same helper the
     // editor's formatting toolbar uses).
@@ -260,8 +281,14 @@ fun NoteListScreen(
             // and the tint over it, in that order.
             Box(
                 modifier = Modifier
+                    // clipToBounds first: backdropBlurBackground paints the captured
+                    // layer translated into this element's coordinates, and drawing
+                    // isn't confined to an element's own bounds by default — without
+                    // this the whole blurred screen is painted over the list. The
+                    // editor's toolbar avoids it by clipping to its rounded shape.
+                    .clipToBounds()
                     .backdropBlurBackground(blurState)
-                    .background(groupedBackground.copy(alpha = 0.72f)),
+                    .background(groupedBackground.copy(alpha = 0.78f)),
             ) {
             CenterAlignedTopAppBar(
                 title = {
@@ -313,6 +340,7 @@ fun NoteListScreen(
                 onNewNote = { viewModel.createNote { note -> onNoteClick(note) } },
                 showAddButton = !isTrash,
                 fieldBackground = searchFieldBackground,
+                blurState = blurState,
             )
         },
     ) { padding ->
@@ -343,7 +371,7 @@ fun NoteListScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
-                        top = padding.calculateTopPadding(),
+                        top = padding.calculateTopPadding() + listTopInset,
                         bottom = listBottomPadding,
                     ),
                 ) {
@@ -391,7 +419,7 @@ fun NoteListScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
-                        top = padding.calculateTopPadding(),
+                        top = padding.calculateTopPadding() + listTopInset,
                         bottom = listBottomPadding,
                     ),
                 ) {
@@ -479,35 +507,42 @@ fun NoteListScreen(
             }
         }
 
-            // Sync indicator and sync error, pinned just under the top bar. An overlay
-            // rather than part of the column above, so neither one shifts the list:
-            // the indicator used to push everything down and back up each time the
-            // 2s-debounced background push ran, i.e. periodically while typing.
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = padding.calculateTopPadding()),
-            ) {
-                if (isSyncing) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                if (syncError != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            // Opaque: it sits over the notes rather than above them now.
-                            .background(groupedBackground)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Sync failed: $syncError",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { viewModel.clearSyncError() }) { Text("Dismiss") }
+            // One status strip for everything the list has to say about syncing,
+            // pinned just under the top bar. An overlay rather than part of the column
+            // above, so it never shifts the list: it used to push everything down and
+            // back up each time the 2s-debounced background push ran, i.e. periodically
+            // while typing. The list makes room for it through listTopInset instead.
+            if (statusMessage != null) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = padding.calculateTopPadding())
+                        .fillMaxWidth()
+                        // Same frosted treatment as the bar above it: the list blurred
+                        // behind a translucent yellow rather than a flat fill, so the
+                        // two read as one piece of chrome. clipToBounds first, or the
+                        // blurred backdrop is painted over the whole list — drawing
+                        // isn't confined to an element's bounds by default.
+                        .clipToBounds()
+                        .backdropBlurBackground(blurState)
+                        .background(NotesYellowVivid.copy(alpha = 0.86f))
+                        .onSizeChanged { statusStripHeight = with(density) { it.height.toDp() } }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        statusMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Black,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // Only a real failure needs dismissing — the other two clear
+                    // themselves when the connection or the sync does.
+                    if (isOnline && !isSyncing && syncError != null) {
+                        TextButton(onClick = { viewModel.clearSyncError() }) {
+                            Text("Dismiss", color = Color.Black)
+                        }
                     }
                 }
             }
@@ -635,6 +670,7 @@ private fun FloatingSearchAndAddBar(
     onFocusConsumed: () -> Unit,
     onNewNote: () -> Unit,
     fieldBackground: Color,
+    blurState: BackdropBlurState,
     showAddButton: Boolean = true,
 ) {
     Row(
@@ -656,6 +692,7 @@ private fun FloatingSearchAndAddBar(
             requestFocus = requestFocus,
             onFocusConsumed = onFocusConsumed,
             background = fieldBackground,
+            blurState = blurState,
             modifier = Modifier.weight(1f),
         )
         if (showAddButton) {
@@ -666,8 +703,24 @@ private fun FloatingSearchAndAddBar(
             // backdrop behind the fill, which the solid FAB no longer needs.
             FloatingActionButton(
                 onClick = onNewNote,
-                containerColor = NotesYellowVivid,
+                // Frosted like the search field beside it: the FAB draws no container
+                // of its own, and the modifiers below paint the blurred list under a
+                // translucent yellow instead. Elevation is 0 for the same reason the
+                // search field has no shadow() — that layer sits between the list and
+                // this button's own drawing, and shows through a translucent fill as a
+                // solid block.
+                modifier = Modifier
+                    .clip(FloatingActionButtonDefaults.shape)
+                    .backdropBlurBackground(blurState)
+                    .background(NotesYellowVivid.copy(alpha = 0.86f)),
+                containerColor = Color.Transparent,
                 contentColor = Color.Black,
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 0.dp,
+                    pressedElevation = 0.dp,
+                    focusedElevation = 0.dp,
+                    hoveredElevation = 0.dp,
+                ),
             ) {
                 Icon(Icons.Default.Add, contentDescription = "New Note")
             }
@@ -684,10 +737,10 @@ private fun FloatingSearchField(
     requestFocus: Boolean,
     onFocusConsumed: () -> Unit,
     background: Color,
+    blurState: BackdropBlurState,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
-    val interactionSource = remember { MutableInteractionSource() }
 
     LaunchedEffect(requestFocus) {
         if (requestFocus) {
@@ -699,14 +752,22 @@ private fun FloatingSearchField(
     // Matches the FAB next to it exactly — 56dp tall, 16dp corners, same elevation —
     // so the two read as one floating control group. `modifier` already carries
     // `weight(1f)` from the caller's Row, so only height needs fixing here.
-    // Solid (opaque) fill; the FAB is solid too.
+    //
+    // Frosted like the top bar: the list blurred behind its own fill rather than an
+    // opaque one, so notes passing underneath stay faintly visible. clip(shape) sits
+    // ahead of the blur, which both rounds the corners and confines it — drawing isn't
+    // limited to an element's bounds by default.
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
             .height(56.dp)
-            .shadow(3.dp, shape)
+            // No shadow(): its graphics layer sits between the list and this field's
+            // own drawing, and with a translucent fill over it that layer was showing
+            // as a pale rectangle inside the field. The yellow border carries the
+            // separation from the list on its own.
             .clip(shape)
-            .background(background)
+            .backdropBlurBackground(blurState)
+            .background(background.copy(alpha = 0.86f))
             .border(0.5.dp, NotesYellowVivid, shape),
     ) {
         Row(
@@ -714,14 +775,14 @@ private fun FloatingSearchField(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            // The standard TextField enforces TextFieldDefaults.MinHeight (56dp) via
-            // padding baked into its internal decoration box, which can't be overridden
-            // through TextField's own parameters — with this field compressed to 48dp,
-            // that excess padding pushed the placeholder/text down and clipped it at the
-            // bottom (the earlier y-offset nudge just moved the already-clipped glyphs,
-            // it didn't remove the clipping). Building it from BasicTextField +
-            // TextFieldDefaults.DecorationBox instead exposes contentPadding directly, so
-            // it can be sized to actually fit this field's real height.
+            // A bare BasicTextField with the placeholder drawn behind it, rather than
+            // Material's TextField or TextFieldDefaults.DecorationBox. Two reasons:
+            // TextField bakes in a 56dp min height through padding that its own
+            // parameters can't override, which clipped the text in this field; and the
+            // decoration box paints a container behind the text whatever colours it's
+            // given, which showed as a solid rectangle over the field's frosted
+            // background. Neither is worth working around for what amounts to one line
+            // of grey text.
             BasicTextField(
                 value = text,
                 onValueChange = onTextChange,
@@ -732,24 +793,17 @@ private fun FloatingSearchField(
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                interactionSource = interactionSource,
             ) { innerTextField ->
-                TextFieldDefaults.DecorationBox(
-                    value = text,
-                    innerTextField = innerTextField,
-                    enabled = true,
-                    singleLine = true,
-                    visualTransformation = VisualTransformation.None,
-                    interactionSource = interactionSource,
-                    placeholder = { Text("Search") },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                    ),
-                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                )
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (text.isEmpty()) {
+                        Text(
+                            "Search",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    innerTextField()
+                }
             }
             if (text.isNotEmpty()) {
                 IconButton(onClick = onClear) {

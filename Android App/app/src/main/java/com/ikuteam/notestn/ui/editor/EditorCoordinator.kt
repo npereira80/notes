@@ -139,6 +139,20 @@ class EditorCoordinator {
         wv.post { wv.evaluateJavascript("window.NativeEditor && window.NativeEditor.setEditable($editable)", null) }
     }
 
+    /** Pushes the note's content down by [dp] inside the page, so it clears the
+     * translucent top bar it now scrolls underneath. Mirrors Mac's setTopInset; the
+     * page reads it as --native-toolbar-inset (see Mac/EditorBundle/build.mjs). This
+     * WebView uses width=device-width, so CSS px map 1:1 to dp. */
+    fun setTopInset(dp: Float) {
+        val wv = webView ?: return
+        wv.post {
+            wv.evaluateJavascript(
+                "document.documentElement.style.setProperty('--native-toolbar-inset', '${dp}px')",
+                null,
+            )
+        }
+    }
+
     fun focus() {
         val wv = webView ?: return
         wv.post {

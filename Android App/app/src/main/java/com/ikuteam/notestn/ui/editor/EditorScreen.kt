@@ -34,6 +34,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FormatListBulleted
@@ -68,6 +69,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -382,6 +384,17 @@ fun EditorScreen(
             // keyboard height on top of the explicit imeHeightDp calc below.
             contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top),
             topBar = {
+                // Translucent, with the note blurred behind it rather than an opaque
+                // fill, so content stays faintly visible as it scrolls underneath.
+                // Same treatment as the note list's bar. clipToBounds first, or
+                // backdropBlurBackground paints the whole captured screen over the
+                // note (drawing isn't confined to an element's bounds by default).
+                Box(
+                    modifier = Modifier
+                        .clipToBounds()
+                        .backdropBlurBackground(blurState)
+                        .background(groupedBackground.copy(alpha = 0.78f)),
+                ) {
                 TopAppBar(
                     title = {},
                     navigationIcon = {
@@ -408,8 +421,9 @@ fun EditorScreen(
                             }
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = groupedBackground),
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 )
+                }
             },
             floatingActionButton = {
                 // Pencil FAB — only in read mode on an editable (non-trashed) note.
@@ -422,20 +436,53 @@ fun EditorScreen(
                         // has to clear the gesture bar itself. The 12dp on the end sits
                         // on top of Scaffold's own fixed 16dp FabSpacing, which isn't
                         // configurable, to reach the 28dp the New Note button uses.
-                        modifier = Modifier.navigationBarsPadding().padding(end = 12.dp),
+                        //
+                        // Frosted like the New Note button in the list: the FAB draws no
+                        // container of its own, and the modifiers paint the blurred note
+                        // under a translucent yellow instead. Elevation is 0 for the
+                        // same reason the toolbar has no shadow() — that layer sits
+                        // between the note and this button's own drawing, and shows
+                        // through a translucent fill as a solid block.
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .padding(end = 12.dp)
+                            .clip(FloatingActionButtonDefaults.shape)
+                            .backdropBlurBackground(blurState)
+                            .background(NotesYellowVivid.copy(alpha = 0.86f)),
                         onClick = { editMode = true },
-                        containerColor = NotesYellowVivid,
+                        containerColor = Color.Transparent,
                         contentColor = Color.Black,
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 0.dp,
+                            pressedElevation = 0.dp,
+                            focusedElevation = 0.dp,
+                            hoveredElevation = 0.dp,
+                        ),
                     ) {
                         Icon(Icons.Filled.Edit, contentDescription = "Edit note")
                     }
                 }
             },
         ) { padding ->
-            Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            // The Scaffold's top padding isn't applied here: the WebView fills the
+            // screen and the note scrolls under the translucent bar. The page keeps
+            // its own content clear of the bar instead, via setTopInset below.
+            Box(modifier = Modifier.fillMaxSize()) {
+            // Push the note's content down past the translucent bar it scrolls under,
+            // so the title clears the bar's controls at rest. Re-runs when the WebView
+            // becomes ready (including after a render-process recovery), since the page
+            // starts back at 0 on a fresh load. The Mac does the same for its own
+            // translucent window toolbar.
+            val topInset = padding.calculateTopPadding()
+            LaunchedEffect(coordinator.isReady, topInset) {
+                if (coordinator.isReady) coordinator.setTopInset(topInset.value)
+            }
+            Column(modifier = Modifier.fillMaxSize()) {
                 // In-note find bar — sits above the editor (like a browser Find bar)
-                // so it doesn't overlap the note content.
+                // so it doesn't overlap the note content. Padded down past the bar,
+                // which the column no longer sits below.
                 if (showFind) {
+                    Spacer(modifier = Modifier.height(topInset))
                     FindBar(
                         query = findQuery,
                         replacement = replaceText,
@@ -488,21 +535,24 @@ fun EditorScreen(
                     // 16dp matches the note list's search bar corner radius
                     // (see NoteListScreen.kt's FloatingSearchField).
                     // Custom Box instead of Surface — same reasoning as the note list's
-                    // search bar / new note button (see NoteListScreen.kt): Surface draws
-                    // its own solid color fill with no hook to slot a blurred backdrop in
-                    // underneath it, so the glass look needs full control over draw order
-                    // (blur, then tint, then content). 0.80 tint alpha matches the note
-                    // list's glass elements.
+                    // search field (see NoteListScreen.kt): Surface draws its own solid
+                    // fill with no hook to slot a blurred backdrop in underneath it, so
+                    // the glass look needs full control over draw order (blur, then
+                    // tint, then content). 0.86 tint matches that field exactly.
+                    //
+                    // No shadow(): its graphics layer sits between the note and this
+                    // toolbar's own drawing, and with a translucent fill over it that
+                    // layer showed through as a solid block. The border carries the
+                    // separation from the note instead.
                     val toolbarShape = RoundedCornerShape(16.dp)
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(horizontal = 10.dp)
                             .padding(bottom = imeHeightDp + 5.dp)
-                            .shadow(8.dp, toolbarShape)
                             .clip(toolbarShape)
                             .backdropBlurBackground(blurState)
-                            .background(groupedBackground.copy(alpha = 0.80f))
+                            .background(groupedBackground.copy(alpha = 0.86f))
                             .border(0.5.dp, toolbarBorderColor, toolbarShape),
                     ) {
                         EditorToolbar(
@@ -515,6 +565,7 @@ fun EditorScreen(
                 }
             }
             }
+        }
         }
     }
 

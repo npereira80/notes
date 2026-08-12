@@ -5,6 +5,10 @@
          the WebView editor's text cursor/selection handles (Compose's MaterialTheme
          primary color, already yellow, has no effect on WebView-hosted content). -->
     <style name="Theme.NotesTN" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Shown on its own while the app launches, before Compose draws anything.
+             The colour resource has a values-night variant, so a dark-mode launch
+             starts dark instead of flashing white. -->
+        <item name="android:windowBackground">@color/window_background</item>
         <item name="android:colorAccent">@color/notes_yellow_vivid</item>
         <!-- WebView's Chromium-drawn selection handles read colorControlActivated
              directly, not colorAccent — set both explicitly rather than relying

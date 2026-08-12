@@ -4,6 +4,9 @@
 
     <!-- Needed to talk to Joplin Cloud's sync API (see JoplinCloudApi.kt). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets the note list say "No internet connection" instead of a sync error when
+         there's nothing to sync over (see ui/common/Connectivity.kt). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".NotesTNApplication"

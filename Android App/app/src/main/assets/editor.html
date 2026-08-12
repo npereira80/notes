@@ -50,12 +50,11 @@
        (which doesn't follow the page's own light/dark theme). */
     --color-checkbox-border: rgba(0, 0, 0, 0.35);
     --color-checkbox-checked-bg: #f9b524;
-    /* Mac only — set imperatively via EditorWebView.swift's setTopInset (mirrors
-       Android's data-theme trick above) whenever the WKWebView is resized to
-       flow underneath the native window toolbar's translucent material, so
-       content has room to scroll clear of the toolbar's icons instead of
-       hard-clipping flush against them. 0px everywhere else (Android/iOS don't
-       set this variable, so it's a no-op there). */
+    /* Set imperatively by the native host's setTopInset (Mac's EditorCoordinator,
+       Android's EditorCoordinator) to the height of the translucent top bar the
+       note scrolls underneath, so content has room to clear the bar's controls at
+       rest instead of hard-clipping flush against them. 0px until a host sets it,
+       so it's a no-op on iOS, which doesn't. */
     --native-toolbar-inset: 0px;
   }
 
@@ -145,10 +144,13 @@
      to grab. */
   body.pm-android {
     padding-bottom: 112px;
-    /* Android's TopAppBar sits directly above the WebView with no gap of its
-       own, leaving the title right up against it — 10px (~10dp, this WebView
-       uses width=device-width so CSS px map 1:1 to dp) of breathing room. */
-    padding-top: 10px;
+    /* 10px (~10dp, this WebView uses width=device-width so CSS px map 1:1 to dp)
+       of breathing room under the top bar, on top of --native-toolbar-inset rather
+       than instead of it: the bar is translucent and the note scrolls underneath
+       it, so the inset is what keeps the title clear of the bar at rest. Android
+       sets that variable the same way Mac does (see EditorCoordinator.setTopInset
+       on both sides). */
+    padding-top: calc(var(--native-toolbar-inset) + 10px);
   }
 
   /* iPhone only (see index.ts's ?platform=ios-phone detection) — the default

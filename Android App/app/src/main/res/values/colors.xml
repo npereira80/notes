@@ -13,4 +13,9 @@
     <color name="notes_yellow_dark">#FFF9B524</color>
     <color name="notes_yellow_dimmed">#FFFBE699</color>
     <color name="notes_yellow_text_select">#FFFAEBC3</color>
+    <!-- The window's own background, which is all that's on screen between tapping the
+         icon and the first Compose frame. Matches GroupedBackground* in ui/theme/Color.kt
+         so the launch is one continuous colour rather than a flash of something else;
+         values-night carries the dark one. -->
+    <color name="window_background">#FFF2F2F6</color>
 </resources>

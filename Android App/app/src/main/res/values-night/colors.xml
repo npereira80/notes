@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dark-mode overrides. Only the window background differs so far: it's what fills the
+  screen between the launcher icon being tapped and Compose's first frame, so in dark
+  mode it has to be dark or the app opens with a white flash.
+-->
+<resources>
+    <color name="window_background">#FF1C1C1E</color>
+</resources>
