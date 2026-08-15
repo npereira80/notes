@@ -63,6 +63,12 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import kotlin.math.abs
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -266,6 +272,15 @@ fun NoteListScreen(
     var statusStripHeight by remember { mutableStateOf(0.dp) }
     val listTopInset = if (statusMessage != null) statusStripHeight else 0.dp
 
+    // Scroll states for the two list branches (search results / grouped). Read by each
+    // row's swipe to ignore a horizontal drag that's really part of a scroll — see
+    // LocalIsListScrolling and SwipeActionsRow.
+    val searchListState = rememberLazyListState()
+    val groupedListState = rememberLazyListState()
+    val isListScrolling = remember(searchListState, groupedListState) {
+        { searchListState.isScrollInProgress || groupedListState.isScrollInProgress }
+    }
+
     // Backdrop blur source for the translucent top bar — the list scrolls underneath
     // it and is what gets blurred (see ui/common/BackdropBlur.kt, the same helper the
     // editor's formatting toolbar uses).
@@ -349,6 +364,7 @@ fun NoteListScreen(
         // as its own top contentPadding instead so the first row still starts below
         // the bar at rest. The sync indicator and the sync error sit in an overlay
         // below, pinned just under the bar rather than pushing the list down.
+        CompositionLocalProvider(LocalIsListScrolling provides isListScrolling) {
         Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().captureForBackdropBlur(blurState)) {
             PullToRefreshBox(
@@ -369,6 +385,7 @@ fun NoteListScreen(
                 EmptyState(isSearching = searchText.isNotEmpty(), onCreateNote = { viewModel.createNote { note -> onNoteClick(note) } })
             } else if (searchText.isNotEmpty()) {
                 LazyColumn(
+                    state = searchListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         top = padding.calculateTopPadding() + listTopInset,
@@ -417,6 +434,7 @@ fun NoteListScreen(
                 }
 
                 LazyColumn(
+                    state = groupedListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         top = padding.calculateTopPadding() + listTopInset,
@@ -546,6 +564,7 @@ fun NoteListScreen(
                     }
                 }
             }
+        }
         }
     }
 
@@ -814,6 +833,15 @@ private fun FloatingSearchField(
     }
 }
 
+/** How far a row has to travel before a swipe counts, as a fraction of its width.
+ * RecyclerView's ItemTouchHelper — what Gmail's swipe is built on — uses 0.5f. */
+private const val SWIPE_COMMIT_FRACTION = 0.4f
+
+/** Whether the note list is being scrolled right now, read by each row's swipe.
+ * A lambda rather than a plain Boolean, and static, so that scrolling doesn't
+ * recompose every visible row just to update it. */
+private val LocalIsListScrolling = staticCompositionLocalOf<() -> Boolean> { { false } }
+
 /**
  * Swipe actions for a note row (an alternative to the long-press menu, which is
  * unchanged). Swipe right to pin/unpin, swipe left to delete — the action fires once
@@ -836,8 +864,31 @@ private fun SwipeActionsRow(
         content()
         return
     }
+    val isListScrolling = LocalIsListScrolling.current
+    var rowWidthPx by remember { mutableFloatStateOf(0f) }
+    // Holds the state so confirmValueChange can read the offset it was dragged to —
+    // the lambda is built before the state exists, so it can't capture it directly.
+    val stateHolder = remember { arrayOfNulls<SwipeToDismissBoxState>(1) }
+
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
+            val offset = stateHolder[0]?.let { runCatching { abs(it.requireOffset()) }.getOrDefault(0f) } ?: 0f
+            // Two guards, both about telling a real swipe from a scroll that drifted
+            // sideways. The row has to have actually travelled far enough, whatever
+            // the velocity was, and the list mustn't be scrolling underneath it.
+            //
+            // The distance check is the important one. Material3's SwipeToDismissBox
+            // commits on velocity alone once the fling passes 125dp/s, ahead of any
+            // positional threshold, and that value isn't configurable
+            // (AnchoredDraggableMinFlingVelocity, no parameter on the component or on
+            // rememberSwipeToDismissBoxState). A quick flick during scrolling clears
+            // 125dp/s easily, which is what was firing delete and pin by accident.
+            // RecyclerView's ItemTouchHelper, which Gmail's swipe is built on, has the
+            // same velocity path but only takes it when the horizontal velocity beats
+            // the vertical one; Compose has no such guard, so this stands in for it.
+            if (rowWidthPx <= 0f || offset < rowWidthPx * SWIPE_COMMIT_FRACTION) return@rememberSwipeToDismissBoxState false
+            if (isListScrolling()) return@rememberSwipeToDismissBoxState false
+
             when (value) {
                 // Pin: the note stays in the list, so accept the action but let the
                 // row settle back into place (returning false).
@@ -857,12 +908,15 @@ private fun SwipeActionsRow(
                 SwipeToDismissBoxValue.Settled -> false
             }
         },
-        // Gmail-like: the action only commits past 40% of the row's width.
-        positionalThreshold = { totalDistance -> totalDistance * 0.4f },
+        // The slow-drag path. Material3's own default here is a flat 56dp, which is a
+        // very short distance on a phone-width row.
+        positionalThreshold = { totalDistance -> totalDistance * SWIPE_COMMIT_FRACTION },
     )
+    stateHolder[0] = state
 
     SwipeToDismissBox(
         state = state,
+        modifier = Modifier.onSizeChanged { rowWidthPx = it.width.toFloat() },
         backgroundContent = {
             val isDelete = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
             val background = when (state.dismissDirection) {
@@ -923,8 +977,9 @@ private fun NoteRow(
     onTogglePin: () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    // Still used by the long-press menu's Delete, which stays confirmed: from a menu
+    // there's no travel to prove intent, and in Trash it's a permanent delete.
     var confirmDelete by remember { mutableStateOf(false) }
-    var confirmPin by remember { mutableStateOf(false) }
     // produceState on Dispatchers.IO — resourceLocalFile is a synchronous SQLite
     // query, and the old remember(note.id, note.body) ran it on the main thread for
     // every row entering composition (and re-ran it on every keystroke-save of the
@@ -953,8 +1008,11 @@ private fun NoteRow(
         SwipeActionsRow(
             // Both swipe actions confirm first — a swipe is easy to trigger by
             // accident while scrolling, so neither should change the note on its own.
-            onPin = { confirmPin = true },
-            onDelete = { confirmDelete = true },
+            // Both act straight away: the swipe has to cross 40% of the row now
+            // (see SWIPE_COMMIT_FRACTION), which is deliberate enough not to need
+            // confirming, and delete only moves the note to Trash.
+            onPin = onTogglePin,
+            onDelete = onDelete,
             isPinned = note.isPinned,
             enabled = !isTrash,
             surface = surface,
@@ -1102,33 +1160,6 @@ private fun NoteRow(
         )
     }
 
-    // Swipe-to-pin confirmation (the long-press menu still pins immediately — a
-    // deliberate tap doesn't need confirming the way a stray swipe does).
-    if (confirmPin) {
-        val pinning = !note.isPinned
-        AlertDialog(
-            onDismissRequest = { confirmPin = false },
-            title = { Text(if (pinning) "Pin Note" else "Unpin Note") },
-            text = {
-                Text(
-                    if (pinning) {
-                        "Pin \"${note.title.ifEmpty { "Untitled" }}\" to the top of the list?"
-                    } else {
-                        "Unpin \"${note.title.ifEmpty { "Untitled" }}\"?"
-                    }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onTogglePin()
-                    confirmPin = false
-                }) { Text(if (pinning) "Pin" else "Unpin") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmPin = false }) { Text("Cancel") }
-            },
-        )
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
