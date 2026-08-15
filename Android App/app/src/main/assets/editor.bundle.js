@@ -13514,6 +13514,22 @@
     }
     return result;
   }
+  function addColSpan(attrs, pos, n = 1) {
+    const result = {
+      ...attrs,
+      colspan: attrs.colspan + n
+    };
+    if (result.colwidth) {
+      result.colwidth = result.colwidth.slice();
+      for (let i = 0; i < n; i++) result.colwidth.splice(pos, 0, 0);
+    }
+    return result;
+  }
+  function columnIsHeader(map2, table, col) {
+    const headerCell = tableNodeTypes(table.type.schema).header_cell;
+    for (let row = 0; row < map2.height; row++) if (table.nodeAt(map2.map[col + row * map2.width]).type != headerCell) return false;
+    return true;
+  }
   var CellSelection = class CellSelection2 extends Selection {
     constructor($anchorCell, $headCell = $anchorCell) {
       const table = $anchorCell.node(-1);
@@ -13845,6 +13861,166 @@
       table
     };
   }
+  function addColumn(tr, { map: map2, tableStart, table }, col) {
+    let refColumn = col > 0 ? -1 : 0;
+    if (columnIsHeader(map2, table, col + refColumn)) refColumn = col == 0 || col == map2.width ? null : 0;
+    for (let row = 0; row < map2.height; row++) {
+      const index = row * map2.width + col;
+      if (col > 0 && col < map2.width && map2.map[index - 1] == map2.map[index]) {
+        const pos = map2.map[index];
+        const cell = table.nodeAt(pos);
+        tr.setNodeMarkup(tr.mapping.map(tableStart + pos), null, addColSpan(cell.attrs, col - map2.colCount(pos)));
+        row += cell.attrs.rowspan - 1;
+      } else {
+        const type = refColumn == null ? tableNodeTypes(table.type.schema).cell : table.nodeAt(map2.map[index + refColumn]).type;
+        const pos = map2.positionAt(row, col, table);
+        tr.insert(tr.mapping.map(tableStart + pos), type.createAndFill());
+      }
+    }
+    return tr;
+  }
+  function addColumnBefore(state, dispatch) {
+    if (!isInTable(state)) return false;
+    if (dispatch) {
+      const rect = selectedRect(state);
+      dispatch(addColumn(state.tr, rect, rect.left));
+    }
+    return true;
+  }
+  function addColumnAfter(state, dispatch) {
+    if (!isInTable(state)) return false;
+    if (dispatch) {
+      const rect = selectedRect(state);
+      dispatch(addColumn(state.tr, rect, rect.right));
+    }
+    return true;
+  }
+  function removeColumn(tr, { map: map2, table, tableStart }, col) {
+    const mapStart = tr.mapping.maps.length;
+    for (let row = 0; row < map2.height; ) {
+      const index = row * map2.width + col;
+      const pos = map2.map[index];
+      const cell = table.nodeAt(pos);
+      const attrs = cell.attrs;
+      if (col > 0 && map2.map[index - 1] == pos || col < map2.width - 1 && map2.map[index + 1] == pos) tr.setNodeMarkup(tr.mapping.slice(mapStart).map(tableStart + pos), null, removeColSpan(attrs, col - map2.colCount(pos)));
+      else {
+        const start = tr.mapping.slice(mapStart).map(tableStart + pos);
+        tr.delete(start, start + cell.nodeSize);
+      }
+      row += attrs.rowspan;
+    }
+  }
+  function deleteColumn(state, dispatch) {
+    if (!isInTable(state)) return false;
+    if (dispatch) {
+      const rect = selectedRect(state);
+      const tr = state.tr;
+      if (rect.left == 0 && rect.right == rect.map.width) return false;
+      for (let i = rect.right - 1; ; i--) {
+        removeColumn(tr, rect, i);
+        if (i == rect.left) break;
+        const table = rect.tableStart ? tr.doc.nodeAt(rect.tableStart - 1) : tr.doc;
+        if (!table) throw new RangeError("No table found");
+        rect.table = table;
+        rect.map = TableMap.get(table);
+      }
+      dispatch(tr);
+    }
+    return true;
+  }
+  function rowIsHeader(map2, table, row) {
+    var _table$nodeAt;
+    const headerCell = tableNodeTypes(table.type.schema).header_cell;
+    for (let col = 0; col < map2.width; col++) if (((_table$nodeAt = table.nodeAt(map2.map[col + row * map2.width])) === null || _table$nodeAt === void 0 ? void 0 : _table$nodeAt.type) != headerCell) return false;
+    return true;
+  }
+  function addRow(tr, { map: map2, tableStart, table }, row) {
+    let rowPos = tableStart;
+    for (let i = 0; i < row; i++) rowPos += table.child(i).nodeSize;
+    const cells = [];
+    let refRow = row > 0 ? -1 : 0;
+    if (rowIsHeader(map2, table, row + refRow)) refRow = row == 0 || row == map2.height ? null : 0;
+    for (let col = 0, index = map2.width * row; col < map2.width; col++, index++) if (row > 0 && row < map2.height && map2.map[index] == map2.map[index - map2.width]) {
+      const pos = map2.map[index];
+      const attrs = table.nodeAt(pos).attrs;
+      tr.setNodeMarkup(tableStart + pos, null, {
+        ...attrs,
+        rowspan: attrs.rowspan + 1
+      });
+      col += attrs.colspan - 1;
+    } else {
+      var _table$nodeAt2;
+      const type = refRow == null ? tableNodeTypes(table.type.schema).cell : (_table$nodeAt2 = table.nodeAt(map2.map[index + refRow * map2.width])) === null || _table$nodeAt2 === void 0 ? void 0 : _table$nodeAt2.type;
+      const node = type === null || type === void 0 ? void 0 : type.createAndFill();
+      if (node) cells.push(node);
+    }
+    tr.insert(rowPos, tableNodeTypes(table.type.schema).row.create(null, cells));
+    return tr;
+  }
+  function addRowBefore(state, dispatch) {
+    if (!isInTable(state)) return false;
+    if (dispatch) {
+      const rect = selectedRect(state);
+      dispatch(addRow(state.tr, rect, rect.top));
+    }
+    return true;
+  }
+  function addRowAfter(state, dispatch) {
+    if (!isInTable(state)) return false;
+    if (dispatch) {
+      const rect = selectedRect(state);
+      dispatch(addRow(state.tr, rect, rect.bottom));
+    }
+    return true;
+  }
+  function removeRow(tr, { map: map2, table, tableStart }, row) {
+    let rowPos = 0;
+    for (let i = 0; i < row; i++) rowPos += table.child(i).nodeSize;
+    const nextRow = rowPos + table.child(row).nodeSize;
+    const mapFrom = tr.mapping.maps.length;
+    tr.delete(rowPos + tableStart, nextRow + tableStart);
+    const seen = /* @__PURE__ */ new Set();
+    for (let col = 0, index = row * map2.width; col < map2.width; col++, index++) {
+      const pos = map2.map[index];
+      if (seen.has(pos)) continue;
+      seen.add(pos);
+      if (row > 0 && pos == map2.map[index - map2.width]) {
+        const attrs = table.nodeAt(pos).attrs;
+        tr.setNodeMarkup(tr.mapping.slice(mapFrom).map(pos + tableStart), null, {
+          ...attrs,
+          rowspan: attrs.rowspan - 1
+        });
+        col += attrs.colspan - 1;
+      } else if (row < map2.height && pos == map2.map[index + map2.width]) {
+        const cell = table.nodeAt(pos);
+        const attrs = cell.attrs;
+        const copy2 = cell.type.create({
+          ...attrs,
+          rowspan: cell.attrs.rowspan - 1
+        }, cell.content);
+        const newPos = map2.positionAt(row + 1, col, table);
+        tr.insert(tr.mapping.slice(mapFrom).map(tableStart + newPos), copy2);
+        col += attrs.colspan - 1;
+      }
+    }
+  }
+  function deleteRow(state, dispatch) {
+    if (!isInTable(state)) return false;
+    if (dispatch) {
+      const rect = selectedRect(state), tr = state.tr;
+      if (rect.top == 0 && rect.bottom == rect.map.height) return false;
+      for (let i = rect.bottom - 1; ; i--) {
+        removeRow(tr, rect, i);
+        if (i == rect.top) break;
+        const table = rect.tableStart ? tr.doc.nodeAt(rect.tableStart - 1) : tr.doc;
+        if (!table) throw new RangeError("No table found");
+        rect.table = table;
+        rect.map = TableMap.get(rect.table);
+      }
+      dispatch(tr);
+    }
+    return true;
+  }
   function deprecated_toggleHeader(type) {
     return function(state, dispatch) {
       if (!isInTable(state)) return false;
@@ -13919,6 +14095,14 @@
   var toggleHeaderRow = toggleHeader("row", { useDeprecatedLogic: true });
   var toggleHeaderColumn = toggleHeader("column", { useDeprecatedLogic: true });
   var toggleHeaderCell = toggleHeader("cell", { useDeprecatedLogic: true });
+  function deleteTable(state, dispatch) {
+    const $pos = state.selection.$anchor;
+    for (let d = $pos.depth; d > 0; d--) if ($pos.node(d).type.spec.tableRole == "table") {
+      if (dispatch) dispatch(state.tr.delete($pos.before(d), $pos.after(d)).scrollIntoView());
+      return true;
+    }
+    return false;
+  }
   function deleteCellSelection(state, dispatch) {
     const sel = state.selection;
     if (!(sel instanceof CellSelection)) return false;
@@ -15027,6 +15211,7 @@
     }
     return true;
   };
+  var tableCommand = (command) => (view) => command(view.state, view.dispatch);
   var insertToggle = (view) => {
     const { state, dispatch } = view;
     const summary = schema_default.nodes.details_summary.create(null, schema_default.text("Toggle"));
@@ -15112,6 +15297,13 @@
     image: insertImage,
     attachment: insertAttachment,
     table: insertTable,
+    rowBefore: tableCommand(addRowBefore),
+    rowAfter: tableCommand(addRowAfter),
+    deleteRow: tableCommand(deleteRow),
+    columnBefore: tableCommand(addColumnBefore),
+    columnAfter: tableCommand(addColumnAfter),
+    deleteColumn: tableCommand(deleteColumn),
+    deleteTable: tableCommand(deleteTable),
     toggle: insertToggle,
     // History
     undo: undoCmd,
@@ -15196,8 +15388,282 @@
     `(?:\\b\\d{1,5}\\s+(?:[A-Za-z\xC0-\xFF.'\xBA\xAA]+\\s+){0,4}${STREET}\\b)|(?:\\b${STREET}\\s+[A-Za-z\xC0-\xFF0-9.'\xBA\xAA ]*?\\d{1,5}(?:\\s*[-\u2013]\\s*\\d{1,4})?)`,
     "gi"
   );
-  function countDigits(s) {
-    return (s.match(/\d/g) || []).length;
+  var COUNTRY_CODES = /* @__PURE__ */ new Set([
+    "1",
+    "7",
+    "20",
+    "27",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "36",
+    "39",
+    "40",
+    "41",
+    "43",
+    "44",
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "51",
+    "52",
+    "53",
+    "54",
+    "55",
+    "56",
+    "57",
+    "58",
+    "60",
+    "61",
+    "62",
+    "63",
+    "64",
+    "65",
+    "66",
+    "81",
+    "82",
+    "84",
+    "86",
+    "90",
+    "91",
+    "92",
+    "93",
+    "94",
+    "95",
+    "98",
+    "211",
+    "212",
+    "213",
+    "216",
+    "218",
+    "220",
+    "221",
+    "222",
+    "223",
+    "224",
+    "225",
+    "226",
+    "227",
+    "228",
+    "229",
+    "230",
+    "231",
+    "232",
+    "233",
+    "234",
+    "235",
+    "236",
+    "237",
+    "238",
+    "239",
+    "240",
+    "241",
+    "242",
+    "243",
+    "244",
+    "245",
+    "246",
+    "247",
+    "248",
+    "249",
+    "250",
+    "251",
+    "252",
+    "253",
+    "254",
+    "255",
+    "256",
+    "257",
+    "258",
+    "260",
+    "261",
+    "262",
+    "263",
+    "264",
+    "265",
+    "266",
+    "267",
+    "268",
+    "269",
+    "290",
+    "291",
+    "297",
+    "298",
+    "299",
+    "350",
+    "351",
+    "352",
+    "353",
+    "354",
+    "355",
+    "356",
+    "357",
+    "358",
+    "359",
+    "370",
+    "371",
+    "372",
+    "373",
+    "374",
+    "375",
+    "376",
+    "377",
+    "378",
+    "379",
+    "380",
+    "381",
+    "382",
+    "383",
+    "385",
+    "386",
+    "387",
+    "389",
+    "420",
+    "421",
+    "423",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "506",
+    "507",
+    "508",
+    "509",
+    "590",
+    "591",
+    "592",
+    "593",
+    "594",
+    "595",
+    "596",
+    "597",
+    "598",
+    "599",
+    "670",
+    "672",
+    "673",
+    "674",
+    "675",
+    "676",
+    "677",
+    "678",
+    "679",
+    "680",
+    "681",
+    "682",
+    "683",
+    "685",
+    "686",
+    "687",
+    "688",
+    "689",
+    "690",
+    "691",
+    "692",
+    "800",
+    "808",
+    "850",
+    "852",
+    "853",
+    "855",
+    "856",
+    "870",
+    "878",
+    "880",
+    "881",
+    "882",
+    "883",
+    "886",
+    "888",
+    "960",
+    "961",
+    "962",
+    "963",
+    "964",
+    "965",
+    "966",
+    "967",
+    "968",
+    "970",
+    "971",
+    "972",
+    "973",
+    "974",
+    "975",
+    "976",
+    "977",
+    "979",
+    "992",
+    "993",
+    "994",
+    "995",
+    "996",
+    "998"
+  ]);
+  var PT_PREFIXES_2 = /* @__PURE__ */ new Set(["21", "22", "91", "92", "93", "96"]);
+  var PT_PREFIXES_3 = /* @__PURE__ */ new Set([
+    "231",
+    "232",
+    "233",
+    "234",
+    "238",
+    "239",
+    "241",
+    "242",
+    "243",
+    "244",
+    "245",
+    "249",
+    "251",
+    "252",
+    "253",
+    "254",
+    "255",
+    "258",
+    "259",
+    "261",
+    "262",
+    "263",
+    "265",
+    "266",
+    "268",
+    "269",
+    "271",
+    "272",
+    "273",
+    "274",
+    "275",
+    "276",
+    "277",
+    "278",
+    "279",
+    "281",
+    "282",
+    "283",
+    "289",
+    "291",
+    "292",
+    "295",
+    "296"
+  ]);
+  function phoneHref(raw) {
+    const trimmed = raw.trim();
+    const digits = (trimmed.match(/\d/g) || []).join("");
+    const withCountryCode = trimmed.startsWith("+") ? digits : digits.startsWith("00") ? digits.slice(2) : null;
+    if (withCountryCode !== null) {
+      if (withCountryCode.length < 8 || withCountryCode.length > 15) return null;
+      const known = [3, 2, 1].some((n) => COUNTRY_CODES.has(withCountryCode.slice(0, n)));
+      return known ? `tel:+${withCountryCode}` : null;
+    }
+    if (digits.length !== 9) return null;
+    if (!PT_PREFIXES_3.has(digits.slice(0, 3)) && !PT_PREFIXES_2.has(digits.slice(0, 2))) return null;
+    return `tel:${digits}`;
   }
   function trimTrailingPunct(s) {
     return s.replace(/[.,;:!?)\]}'"]+$/, "");
@@ -15222,11 +15688,8 @@
       return { value, href };
     });
     scan(PHONE_RE, (raw) => {
-      const digits = countDigits(raw);
-      if (digits < 9 || digits > 15) return null;
-      const plus = raw.trimStart().startsWith("+") ? "+" : "";
-      const tel = plus + (raw.match(/\d/g) || []).join("");
-      return { value: raw, href: `tel:${tel}` };
+      const href = phoneHref(raw);
+      return href ? { value: raw, href } : null;
     });
     scan(ADDRESS_RE, (raw) => {
       const value = raw.trim();
@@ -15826,6 +16289,7 @@
     let inOrderedList = false;
     let inTaskList = false;
     let inCheckedTask = false;
+    let inTable = false;
     let hasLink = false;
     let linkHref = null;
     const { nodes: n, marks: m } = schema_default;
@@ -15854,6 +16318,9 @@
           inTaskList = true;
           inCheckedTask = !!node.attrs.checked;
           break;
+        case n.table:
+          inTable = true;
+          break;
       }
     }
     const linkMark = m.link.isInSet(state.storedMarks || $from.marks());
@@ -15873,6 +16340,7 @@
       inOrderedList,
       inTaskList,
       inCheckedTask,
+      inTable,
       headingLevel,
       hasLink,
       linkHref

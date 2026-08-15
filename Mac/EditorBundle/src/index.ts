@@ -37,6 +37,7 @@ interface SelectionState {
   inOrderedList: boolean;
   inTaskList: boolean;
   inCheckedTask: boolean;
+  inTable: boolean;      // cursor is in a table — drives the toolbar's table menu
   headingLevel: number;  // 0 = not a heading
   hasLink: boolean;
   linkHref: string | null;
@@ -142,9 +143,8 @@ function isUrl(text: string): boolean {
 // "active links" via ProseMirror decorations (see the auto-link plugin in
 // createEditor). Detection is presentational only — it never alters the stored
 // document/Markdown. On tap, native opens the right app (browser / mail / phone /
-// maps). Kept intentionally simple; phone and address detection are best-effort
-// heuristics (bare 9-digit local numbers are matched per product decision, and
-// addresses key off street-type keywords near a number).
+// maps). Address detection is a best-effort heuristic (street-type keywords near a
+// number); phone detection is deliberately strict, see isPhoneNumber.
 
 type DetectedLinkType = 'url' | 'email' | 'phone' | 'address';
 interface DetectedLink {
@@ -156,9 +156,8 @@ interface DetectedLink {
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>()]+/gi;
-// Candidate phone runs; digit count is validated in detectLinks (9–15) so bare
-// 9-digit local numbers match while short numeric tokens (years, postal codes,
-// quantities) don't.
+// Candidate phone runs. This only finds digit-ish spans; whether one is really a
+// phone number is decided by phoneHref below.
 const PHONE_RE = /(?:\+|00)?\d[\d\s().-]{5,}\d/g;
 // Street-type keywords (Portuguese + English), used by the address heuristic.
 const STREET = "(?:Rua|R\\.|Avenida|Av\\.?|Travessa|Tv\\.?|Largo|Pra[çc]a|Estrada|Alameda|Beco|Street|St\\.?|Avenue|Ave\\.?|Road|Rd\\.?|Boulevard|Blvd\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Way|Court|Ct\\.?|Place|Pl\\.?)";
@@ -170,8 +169,85 @@ const ADDRESS_RE = new RegExp(
   'gi'
 );
 
-function countDigits(s: string): number {
-  return (s.match(/\d/g) || []).length;
+// Assigned country calling codes (ITU-T E.164). A "+" or "00" number is only linked
+// if what follows is one of these, so "+999 123 456" stays plain text. Matched
+// longest-first, since codes are 1 to 3 digits and every 1- and 2-digit code is a
+// prefix of longer ones.
+const COUNTRY_CODES = new Set([
+  '1', '7',
+  '20', '27', '30', '31', '32', '33', '34', '36', '39',
+  '40', '41', '43', '44', '45', '46', '47', '48', '49',
+  '51', '52', '53', '54', '55', '56', '57', '58',
+  '60', '61', '62', '63', '64', '65', '66',
+  '81', '82', '84', '86',
+  '90', '91', '92', '93', '94', '95', '98',
+  '211', '212', '213', '216', '218',
+  '220', '221', '222', '223', '224', '225', '226', '227', '228', '229',
+  '230', '231', '232', '233', '234', '235', '236', '237', '238', '239',
+  '240', '241', '242', '243', '244', '245', '246', '247', '248', '249',
+  '250', '251', '252', '253', '254', '255', '256', '257', '258',
+  '260', '261', '262', '263', '264', '265', '266', '267', '268', '269',
+  '290', '291', '297', '298', '299',
+  '350', '351', '352', '353', '354', '355', '356', '357', '358', '359',
+  '370', '371', '372', '373', '374', '375', '376', '377', '378', '379',
+  '380', '381', '382', '383', '385', '386', '387', '389',
+  '420', '421', '423',
+  '500', '501', '502', '503', '504', '505', '506', '507', '508', '509',
+  '590', '591', '592', '593', '594', '595', '596', '597', '598', '599',
+  '670', '672', '673', '674', '675', '676', '677', '678', '679',
+  '680', '681', '682', '683', '685', '686', '687', '688', '689',
+  '690', '691', '692',
+  '800', '808', '850', '852', '853', '855', '856', '870', '878',
+  '880', '881', '882', '883', '886', '888',
+  '960', '961', '962', '963', '964', '965', '966', '967', '968',
+  '970', '971', '972', '973', '974', '975', '976', '977', '979',
+  '992', '993', '994', '995', '996', '998',
+]);
+
+// Portuguese dialling codes a bare (no country code) number may start with:
+// geographic 21/22, and mobile 91/92/93/96.
+const PT_PREFIXES_2 = new Set(['21', '22', '91', '92', '93', '96']);
+// The three-digit geographic codes. Ranges Anacom hasn't assigned are absent on
+// purpose — that's what stops a 9-digit NIF, order number or account number from
+// being dialled.
+const PT_PREFIXES_3 = new Set([
+  '231', '232', '233', '234', '238', '239',
+  '241', '242', '243', '244', '245', '249',
+  '251', '252', '253', '254', '255', '258', '259',
+  '261', '262', '263', '265', '266', '268', '269',
+  '271', '272', '273', '274', '275', '276', '277', '278', '279',
+  '281', '282', '283', '289',
+  '291', '292', '295', '296',
+]);
+
+/** The tel: URL for a candidate run, or null if it isn't a phone number.
+ *
+ * Two ways to qualify. With a country code (a leading "+", or "00" as the rest of
+ * Europe writes it) the code has to be a real one and the whole number 8 to 15
+ * digits, E.164's own maximum. Without one it has to be a Portuguese number: exactly
+ * nine digits, starting with an assigned dialling code.
+ *
+ * Bare digits used to be linked on length alone, which turned tax numbers, invoice
+ * references and anything else nine digits long into phone numbers. */
+function phoneHref(raw: string): string | null {
+  const trimmed = raw.trim();
+  const digits = (trimmed.match(/\d/g) || []).join('');
+
+  const withCountryCode = trimmed.startsWith('+')
+    ? digits
+    : digits.startsWith('00')
+      ? digits.slice(2)
+      : null;
+
+  if (withCountryCode !== null) {
+    if (withCountryCode.length < 8 || withCountryCode.length > 15) return null;
+    const known = [3, 2, 1].some((n) => COUNTRY_CODES.has(withCountryCode.slice(0, n)));
+    return known ? `tel:+${withCountryCode}` : null;
+  }
+
+  if (digits.length !== 9) return null;
+  if (!PT_PREFIXES_3.has(digits.slice(0, 3)) && !PT_PREFIXES_2.has(digits.slice(0, 2))) return null;
+  return `tel:${digits}`;
 }
 
 function trimTrailingPunct(s: string): string {
@@ -206,12 +282,8 @@ function detectLinks(text: string): DetectedLink[] {
     return { value, href };
   });
   scan(PHONE_RE, (raw) => {
-    const digits = countDigits(raw);
-    if (digits < 9 || digits > 15) return null;
-    // Keep a leading + if present; strip spaces/formatting for the tel: URL.
-    const plus = raw.trimStart().startsWith('+') ? '+' : '';
-    const tel = plus + (raw.match(/\d/g) || []).join('');
-    return { value: raw, href: `tel:${tel}` };
+    const href = phoneHref(raw);
+    return href ? { value: raw, href } : null;
   });
   scan(ADDRESS_RE, (raw) => {
     const value = raw.trim();
@@ -1019,6 +1091,7 @@ function getSelectionState(state: EditorState): SelectionState {
   let inOrderedList = false;
   let inTaskList = false;
   let inCheckedTask = false;
+  let inTable = false;
   let hasLink = false;
   let linkHref: string | null = null;
 
@@ -1037,6 +1110,7 @@ function getSelectionState(state: EditorState): SelectionState {
         inTaskList = true;
         inCheckedTask = !!node.attrs.checked;
         break;
+      case n.table: inTable = true; break;
     }
   }
 
@@ -1058,6 +1132,7 @@ function getSelectionState(state: EditorState): SelectionState {
     inOrderedList,
     inTaskList,
     inCheckedTask,
+    inTable,
     headingLevel,
     hasLink,
     linkHref,

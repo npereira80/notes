@@ -28,6 +28,7 @@ struct EditorSelectionState {
     var inOrderedList = false
     var inTaskList = false
     var inCheckedTask = false
+    var inTable = false    // drives the toolbar's table menu
     var headingLevel = 0   // 0 = paragraph
     var hasLink = false
     var linkHref: String? = nil
@@ -89,6 +90,7 @@ final class EditorCoordinator: NSObject, ObservableObject, WKScriptMessageHandle
                     inOrderedList: s["inOrderedList"] as? Bool ?? false,
                     inTaskList: s["inTaskList"] as? Bool ?? false,
                     inCheckedTask: s["inCheckedTask"] as? Bool ?? false,
+                    inTable: s["inTable"] as? Bool ?? false,
                     headingLevel: s["headingLevel"] as? Int ?? 0,
                     hasLink: s["hasLink"] as? Bool ?? false,
                     linkHref: s["linkHref"] as? String
@@ -1096,9 +1098,7 @@ struct EditorToolbarView: View {
             Divider().frame(height: 20)
 
             // Insert (image moved above; table/HR remain)
-            FormatButton(icon: "tablecells") {
-                coordinator.execCommand("table", value: ["rows": 3, "cols": 3])
-            }
+            TableMenu(coordinator: coordinator)
             FormatButton(icon: "minus") {
                 coordinator.execCommand("horizontalRule")
             }
@@ -1194,6 +1194,42 @@ private struct MarkdownSourceView: View {
 }
 
 // MARK: - Format buttons
+
+/// The toolbar's table control: a native pull-down menu (UIKit's own, via SwiftUI's
+/// Menu). Outside a table it offers only Insert Table; inside one it offers the row
+/// and column actions, so the same button covers making a table and editing it.
+/// Every item runs a prosemirror-tables command through the shared bundle (see
+/// commands.ts), which is also what decides whether an action applies at all.
+struct TableMenu: View {
+    @ObservedObject var coordinator: EditorCoordinator
+
+    var body: some View {
+        Menu {
+            if coordinator.selectionState.inTable {
+                Button("Add Row Above")    { coordinator.execCommand("rowBefore") }
+                Button("Add Row Below")    { coordinator.execCommand("rowAfter") }
+                Button("Delete Row")       { coordinator.execCommand("deleteRow") }
+                Divider()
+                Button("Add Column Left")  { coordinator.execCommand("columnBefore") }
+                Button("Add Column Right") { coordinator.execCommand("columnAfter") }
+                Button("Delete Column")    { coordinator.execCommand("deleteColumn") }
+                Divider()
+                Button("Delete Table", role: .destructive) { coordinator.execCommand("deleteTable") }
+            } else {
+                Button("Insert Table") {
+                    coordinator.execCommand("table", value: ["rows": 3, "cols": 3])
+                }
+            }
+        } label: {
+            Image(systemName: "tablecells")
+                .font(.system(size: 15))
+                .frame(width: 32.5, height: 27.5)
+                .contentShape(Rectangle())
+        }
+        .menuIndicator(.hidden)
+        .foregroundStyle(.secondary)
+    }
+}
 
 struct FormatButton: View {
     let icon: String

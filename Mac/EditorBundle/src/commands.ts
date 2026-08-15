@@ -15,6 +15,15 @@ import {
   lift,
 } from 'prosemirror-commands';
 import {
+  addRowBefore,
+  addRowAfter,
+  deleteRow,
+  addColumnBefore,
+  addColumnAfter,
+  deleteColumn,
+  deleteTable,
+} from 'prosemirror-tables';
+import {
   wrapInList,
   liftListItem,
   sinkListItem,
@@ -233,6 +242,14 @@ const insertTable: CommandFn = (view, value?: { rows: number; cols: number }) =>
   return true;
 };
 
+// Row and column editing, straight from prosemirror-tables. Each returns false when
+// the cursor isn't in a table, which is what the toolbar menus key off (they only
+// offer these when selectionState.inTable is true). The library's own commands are
+// used rather than hand-built transactions so colspan/rowspan and the column widths
+// our resizing writes stay consistent.
+const tableCommand = (command: (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean): CommandFn =>
+  (view) => command(view.state, view.dispatch);
+
 // ── Toggle / collapsible block ────────────────────────────────────────────────
 
 const insertToggle: CommandFn = (view) => {
@@ -347,6 +364,13 @@ export const commands: Record<string, CommandFn> = {
   image: insertImage,
   attachment: insertAttachment,
   table: insertTable,
+  rowBefore: tableCommand(addRowBefore),
+  rowAfter: tableCommand(addRowAfter),
+  deleteRow: tableCommand(deleteRow),
+  columnBefore: tableCommand(addColumnBefore),
+  columnAfter: tableCommand(addColumnAfter),
+  deleteColumn: tableCommand(deleteColumn),
+  deleteTable: tableCommand(deleteTable),
   toggle: insertToggle,
 
   // History

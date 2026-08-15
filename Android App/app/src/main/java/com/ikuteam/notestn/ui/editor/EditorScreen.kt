@@ -679,6 +679,7 @@ private fun EditorToolbar(
 ) {
     val s = coordinator.selectionState
     var showHeadingMenu by remember { mutableStateOf(false) }
+    var showTableMenu by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -763,8 +764,53 @@ private fun EditorToolbar(
 
         ToolbarDivider()
         // Image moved above; table/HR remain
-        ToolbarIconButton(Icons.Filled.TableChart, "Insert Table") {
-            coordinator.execCommand("table", buildJsonObject { put("rows", 3); put("cols", 3) })
+        // Table: a menu rather than a plain button. Outside a table it offers only
+        // Insert Table; inside one it offers the row and column actions, so the same
+        // button covers making a table and editing it. Each item runs a
+        // prosemirror-tables command through the shared bundle (see commands.ts).
+        // Same focusable = false and collapseSelection as the Text Style menu above,
+        // for the same reasons.
+        Box {
+            ToolbarIconButton(Icons.Filled.TableChart, if (s.inTable) "Table" else "Insert Table") {
+                coordinator.collapseSelection()
+                showTableMenu = true
+            }
+            DropdownMenu(
+                expanded = showTableMenu,
+                onDismissRequest = { showTableMenu = false },
+                properties = PopupProperties(focusable = false),
+            ) {
+                if (s.inTable) {
+                    DropdownMenuItem(text = { Text("Add Row Above") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("rowBefore")
+                    })
+                    DropdownMenuItem(text = { Text("Add Row Below") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("rowAfter")
+                    })
+                    DropdownMenuItem(text = { Text("Delete Row") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("deleteRow")
+                    })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("Add Column Left") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("columnBefore")
+                    })
+                    DropdownMenuItem(text = { Text("Add Column Right") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("columnAfter")
+                    })
+                    DropdownMenuItem(text = { Text("Delete Column") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("deleteColumn")
+                    })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("Delete Table") }, onClick = {
+                        showTableMenu = false; coordinator.execCommand("deleteTable")
+                    })
+                } else {
+                    DropdownMenuItem(text = { Text("Insert Table") }, onClick = {
+                        showTableMenu = false
+                        coordinator.execCommand("table", buildJsonObject { put("rows", 3); put("cols", 3) })
+                    })
+                }
+            }
         }
         ToolbarIconButton(Icons.Filled.HorizontalRule, "Horizontal Rule") { coordinator.execCommand("horizontalRule") }
 

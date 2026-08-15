@@ -16,6 +16,7 @@ data class EditorSelectionState(
     val inOrderedList: Boolean = false,
     val inTaskList: Boolean = false,
     val inCheckedTask: Boolean = false,
+    val inTable: Boolean = false,
     val headingLevel: Int = 0,
     val hasLink: Boolean = false,
     val linkHref: String? = null,
